@@ -13,7 +13,7 @@ import { Client, localServer, type ClientFrame } from '../index.ts';
 function fakeDaemon() {
 	const path = join(mkdtempSync(join(tmpdir(), 'cohesion-')), 'd.sock');
 	const heard: ClientFrame[] = [];
-	const transcript: { content: unknown }[] = [];
+	const transcript: { id: number; content: unknown }[] = [];
 	const state = { drop: false, sessions: 0 };
 	Bun.listen<{ buffer: string; identified: boolean }>({
 		unix: path,
@@ -37,7 +37,8 @@ function fakeDaemon() {
 					const frame = JSON.parse(line) as ClientFrame & { id: number };
 					heard.push(frame);
 					if (frame.type === 'actorTaskUpdate' && frame.kind === 'message') {
-						transcript.push({ content: { sender: 'actor', ...frame.content } });
+						const content = frame.content.kind === 'toolUse' ? { ...frame.content, ended_at: null } : frame.content;
+						transcript.push({ id: transcript.length + 1, content: { sender: 'actor', ...content } });
 						if (state.drop) {
 							state.drop = false;
 							return void socket.end();
@@ -95,5 +96,19 @@ test('a message stored before its session dropped is not sent twice', async () =
 		{ kind: 'text', text: 'dropped' },
 		{ kind: 'text', text: 'after' },
 	]);
+	client.stop();
+});
+
+test('a tool use stored before its session dropped settles with its id, to end it by', async () => {
+	const daemon = fakeDaemon();
+	const client = new Client(localServer(daemon.path, 'test'), { offers, onCall: async () => ({ kind: 'accepted' }) });
+	void client.run();
+	await client.report(1, text('before'));
+	daemon.state.drop = true;
+	const use = await client.report(1, { kind: 'message', content: { kind: 'toolUse', tool: 'Edit', summary: 'a.ts' } });
+	expect(use.id).toBe(2);
+	await client.report(1, { kind: 'toolEnd', message_id: use.id });
+	expect(daemon.state.sessions).toBe(2);
+	expect(updates(daemon.heard)).toEqual([{ kind: 'text', text: 'before' }, { kind: 'toolUse', tool: 'Edit', summary: 'a.ts' }, 'toolEnd']);
 	client.stop();
 });

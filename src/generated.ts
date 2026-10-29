@@ -150,7 +150,7 @@ export type ActorFileChangeKind =
  * What an actor says in a task, tagged by `kind`.
  *
  * - `"text"`: the agent's own words, as Markdown.
- * - `"toolUse"`: a tool it ran, such as editing a file.
+ * - `"toolUse"`: a tool it ran, such as editing a file, and when it ended.
  * - `"question"`: questions for the user, each with options (Claude Code's
  *   `AskUserQuestion`, Codex's `request_user_input`).
  * - `"permission"`: something it needs the user's leave to do: run a
@@ -171,6 +171,13 @@ export type ActorMessageContent =
 	tool: string;
 	/** What it did, in a line, such as "src/main.rs". */
 	summary: string;
+	/**
+	 * When it ended, in Unix seconds, as Cohesion heard of it from a
+	 * `toolEnd` update; `null` while it runs, and for one whose actor
+	 * never said (a tool it was stopped in, or an actor that doesn't
+	 * report ends).
+	 */
+	ended_at: number | null;
 }
 	| {
 	kind: "question";
@@ -456,6 +463,20 @@ export interface AgentCodeExecution {
 	/** Why the script failed, when it did. */
 	error: string | null;
 }
+
+/**
+ * Where a cue wakes its agent, and on what model.
+ *
+ * - `"low"`, `"medium"`, `"high"`: a background run each time the cue
+ *   fires, on that tier's default model.
+ * - `"foreground"`: a turn of the agent's conversation, once; the cue is
+ *   removed as it fires.
+ */
+export type AgentCueEffort =
+	| "low"
+	| "medium"
+	| "high"
+	| "foreground";
 
 /** What became of a memory, in a `memory` message. */
 export type AgentMemoryChange =
@@ -1732,7 +1753,8 @@ export type IntelligenceAgentColor =
 	| "yellow";
 
 /**
- * A hook an agent watches to wake itself in the background.
+ * A hook an agent watches to wake itself, in the background or, once, in
+ * its conversation.
  *
  * An agent can have several, each with its own name.
  */
@@ -1753,8 +1775,11 @@ export interface IntelligenceAgentCue {
 	script: string;
 	/** What the agent told itself to do when it wakes. */
 	instructions: string;
-	/** Which tier's default model a run uses. */
-	effort: IntelligenceEffort;
+	/**
+	 * How capable a model each background run gets, or `foreground` for a
+	 * cue that wakes the agent's conversation once.
+	 */
+	effort: AgentCueEffort;
 }
 
 /** A grant an agent holds; an agent holds each kind at most once. */
@@ -1925,19 +1950,6 @@ export interface IntelligenceDefault {
 	/** The endpoint model the tier uses. Removing that model unsets the tier. */
 	endpoint_model_id: number;
 }
-
-/**
- * How much model a background run gets; each picks the matching tier's
- * default model.
- *
- * - `"low"`: quick checks and short replies.
- * - `"medium"`: ordinary work.
- * - `"high"`: hard, multi-step reasoning.
- */
-export type IntelligenceEffort =
-	| "low"
-	| "medium"
-	| "high";
 
 /**
  * A known provider to create an endpoint for, or a custom endpoint

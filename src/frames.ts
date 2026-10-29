@@ -119,11 +119,24 @@ export type ClientResult = { kind: 'accepted' } | { kind: string; [field: string
 /**
  * One thing an actor reports about a task, tagged by `kind`
  * (`ActorTaskReport`). A message's `images` show below it; left out, none.
+ * A `toolEnd` names the `toolUse` message whose tool finished by the `id`
+ * its reply carried.
  */
 export type ActorTaskReport =
-	| { kind: 'message'; content: ActorMessageContent; images?: ClientImage[] }
+	| { kind: 'message'; content: ActorSaidContent; images?: ClientImage[] }
 	| { kind: 'status'; status: ActorTaskStatus }
-	| { kind: 'progress'; progress: string | null };
+	| { kind: 'progress'; progress: string | null }
+	| { kind: 'toolEnd'; message_id: number };
+
+/**
+ * What an actor says, as it sends it: a `toolUse` leaves out `ended_at`,
+ * which cohesiond stamps once a `toolEnd` names it.
+ */
+export type ActorSaidContent = ActorMessageContent extends infer Content
+	? Content extends { kind: 'toolUse' }
+		? Omit<Content, 'ended_at'>
+		: Content
+	: never;
 
 // ---- Frames ----------------------------------------------------------------
 

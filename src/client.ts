@@ -4,8 +4,8 @@
 // docs/actors.md describes.
 
 import { CohesionError, SessionClosedError } from './errors.ts';
-import type { ActorTaskReport, ArgsOf, ClientCapabilities, RequestType } from './frames.ts';
-import type { ActorMessageContent, ActorTaskMessage, Replies } from './generated.ts';
+import type { ActorSaidContent, ActorTaskReport, ArgsOf, ClientCapabilities, RequestType } from './frames.ts';
+import type { ActorTaskMessage, Replies } from './generated.ts';
 import type { Server } from './server.ts';
 import { Session, type CallHandler, type SessionEnd } from './session.ts';
 
@@ -136,9 +136,10 @@ export class Client {
 			for (let next = this.held[0]; next && this.session; next = this.held[0]) {
 				const session = this.session;
 				try {
-					if (next.unsure && next.report.kind === 'message' && (await stored(session, next.taskId, next.report.content))) {
+					const already = next.unsure && next.report.kind === 'message' ? await stored(session, next.taskId, next.report.content) : null;
+					if (already) {
 						this.held.shift();
-						next.resolve(undefined);
+						next.resolve(already);
 						continue;
 					}
 					const reply = await session.report(next.taskId, next.report);
@@ -161,15 +162,17 @@ export class Client {
 }
 
 /**
- * Whether the last thing the actor said in task `taskId` is `content`: an
+ * The last thing the actor said in task `taskId`, when it is `content`: an
  * update sent before a session dropped, unanswered, may have been stored.
+ * A tool's `ended_at` is cohesiond's, not what the actor said.
  */
-async function stored(session: Session, taskId: number, content: ActorMessageContent): Promise<boolean> {
+async function stored(session: Session, taskId: number, content: ActorSaidContent): Promise<ActorTaskMessage | null> {
 	const messages = await session.request('listActorTaskMessages', { task_id: taskId });
 	const last = messages.findLast((message) => message.content.sender === 'actor');
-	if (!last) return false;
+	if (!last) return null;
 	const { sender: _, ...said } = last.content;
-	return canonical(said) === canonical(content);
+	if (said.kind === 'toolUse') delete (said as { ended_at?: unknown }).ended_at;
+	return canonical(said) === canonical(content) ? last : null;
 }
 
 /** JSON with every object's keys sorted, to compare values. */
