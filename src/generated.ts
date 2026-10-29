@@ -383,6 +383,8 @@ export type ActorTaskStatus =
  * - `"search"`: searches files or their contents (`Grep`, `Glob`).
  * - `"web"`: fetches or searches the web (`WebFetch`, `WebSearch`).
  * - `"agent"`: hands work to another agent (`Agent`).
+ * - `"skill"`: takes up a skill, instructions it loads for the task
+ *   (`Skill`).
  * - `"other"`: anything else, and a tool its client didn't classify.
  */
 export type ActorToolKind =
@@ -392,6 +394,7 @@ export type ActorToolKind =
 	| "search"
 	| "web"
 	| "agent"
+	| "skill"
 	| "other";
 
 /**
