@@ -355,6 +355,23 @@ export type ActorTaskMessageContent =
 	| ({ sender: "user" } & ActorUserContent);
 
 /**
+ * An actor task matching a full-text search of the tasks' titles and
+ * what the user and the actor said in them, with the passage that
+ * matched. Read only by the search, which joins each match as `hit`.
+ */
+export interface ActorTaskSearchHit {
+	id: number;
+	actor_id: number;
+	title: string;
+	last_activity_at: number;
+	/**
+	 * A few words of the message that matched, in Markdown; `null` when
+	 * the title matched best.
+	 */
+	excerpt: string | null;
+}
+
+/**
  * Where an actor task stands.
  *
  * - `"working"`: the actor is at it.
@@ -396,6 +413,21 @@ export type ActorToolKind =
 	| "agent"
 	| "skill"
 	| "other";
+
+/**
+ * How much of its limits an actor has used, as its client last reported:
+ * its context window, and the plan it runs on. Either may be left out
+ * when the actor doesn't say.
+ */
+export interface ActorUsage {
+	/** Its context window. Left out, unknown. */
+	context?: ContextUsage | null;
+	/**
+	 * Its plan's limits, such as a five-hour and a weekly one, in the
+	 * order to show them. Left out, none.
+	 */
+	plan?: PlanUsage[];
+}
 
 /**
  * What the user says in an actor task, tagged by `kind`.
@@ -955,6 +987,14 @@ export interface ConnectorService {
 	icon: string | null;
 	/** Why the extension couldn't describe its service. */
 	error: string | null;
+}
+
+/** How full an actor's context window is, in tokens. */
+export interface ContextUsage {
+	/** The tokens the context holds now. */
+	used_tokens: number;
+	/** The most it can hold, more than zero. */
+	total_tokens: number;
 }
 
 /** Adds an article folder titled `title`, last in the workspace's order. */
@@ -2089,6 +2129,7 @@ export type Invalidation =
 	| { kind: "actors" }
 	| { kind: "actorTasks" }
 	| { kind: "actorTask"; id: number }
+	| { kind: "actorUsage" }
 	| { kind: "notification"; id: {
 	title: string;
 	message: string;
@@ -2293,6 +2334,11 @@ export interface ListWorkspaceResourceKindsRequest {
 	workspace_id: number;
 }
 
+/** How much of its limits actor `actor_id` has used. */
+export type ListedActorUsage = {
+	actor_id: number;
+} & ActorUsage;
+
 /**
  * A client as the clients list shows it. Presence is said here and only
  * here: a client's endpoint or account is reachable while the client it
@@ -2429,6 +2475,16 @@ export interface PairingCode {
 	 * registration, for ten minutes.
 	 */
 	code: string;
+}
+
+/** One limit of the plan an actor runs on, such as its five-hour limit. */
+export interface PlanUsage {
+	/** What the limit is, in a few words: "5-hour limit". */
+	label: string;
+	/** How much of it is used, from 0 to 1. */
+	used: number;
+	/** When it resets, in Unix seconds. Left out, unknown. */
+	resets_at?: number | null;
 }
 
 /**
@@ -2862,6 +2918,14 @@ export interface ScheduleTaskRequest {
  * string replies can have their own `ReplyData` variant.
  */
 export type ScriptResult = string;
+
+/**
+ * Searches every actor task's title and what the user and the actor said
+ * in it, best match first. `query` is FTS5 syntax.
+ */
+export interface SearchActorTasksRequest {
+	query: string;
+}
 
 /**
  * Lists the items of kind `kind_id` connector account `account_id` offers
@@ -3684,9 +3748,19 @@ export interface Requests {
 	listActivities: ListActivitiesRequest;
 	/** Lists the actors the clients offer. */
 	listActors: NoArgs;
+	/**
+	 * Lists how much of its limits each actor whose client is connected
+	 * has used.
+	 */
+	listActorUsage: NoArgs;
 	/** Lists actor tasks, most recently active first. */
 	listActorTasks: ListActorTasksRequest;
 	getActorTask: GetActorTaskRequest;
+	/**
+	 * Full-text matches among actor tasks' titles and transcripts, best
+	 * first.
+	 */
+	searchActorTasks: SearchActorTasksRequest;
 	/** Marks actor task `task_id` read. */
 	markActorTaskRead: MarkActorTaskReadRequest;
 	/** Lists what was said in an actor task, oldest first. */
@@ -4040,9 +4114,19 @@ export interface Replies {
 	listActivities: Activity[];
 	/** Lists the actors the clients offer. */
 	listActors: Actor[];
+	/**
+	 * Lists how much of its limits each actor whose client is connected
+	 * has used.
+	 */
+	listActorUsage: ListedActorUsage[];
 	/** Lists actor tasks, most recently active first. */
 	listActorTasks: ActorTask[];
 	getActorTask: ActorTask;
+	/**
+	 * Full-text matches among actor tasks' titles and transcripts, best
+	 * first.
+	 */
+	searchActorTasks: ActorTaskSearchHit[];
 	/** Marks actor task `task_id` read. */
 	markActorTaskRead: ActorTask;
 	/** Lists what was said in an actor task, oldest first. */

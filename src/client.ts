@@ -1,11 +1,11 @@
 // A client that stays connected to cohesiond: it reconnects when its
-// session drops, offers what it serves again, and holds its actors' task
-// updates while it is away, as "Staying in sync" in cohesion's
+// session drops, offers what it serves again, says its actors' usage
+// again, and holds its actors' task updates while it is away, as "Staying in sync" in cohesion's
 // docs/actors.md describes.
 
 import { CohesionError, SessionClosedError } from './errors.ts';
 import type { ActorSaidContent, ActorTaskReport, ArgsOf, ClientCapabilities, RequestType } from './frames.ts';
-import type { ActorTaskMessage, Replies } from './generated.ts';
+import type { ActorTaskMessage, ActorUsage, Replies } from './generated.ts';
 import type { Server } from './server.ts';
 import { Session, type CallHandler, type SessionEnd } from './session.ts';
 
@@ -49,6 +49,8 @@ export class Client {
 	private session: Session | null = null;
 	private stopped = false;
 	private held: Held[] = [];
+	/** What each actor last said of its usage, to say again on each new session. */
+	private usages = new Map<string, ActorUsage>();
 	private sending = false;
 	private wake: (() => void) | null = null;
 
@@ -69,6 +71,7 @@ export class Client {
 				await session.offer(this.options.offers);
 				await this.options.onConnect?.(session);
 				this.session = session;
+				for (const [actor, usage] of this.usages) session.usage(actor, usage).catch(() => {});
 				retry = FIRST_RETRY;
 				this.options.onState?.({ kind: 'online', session });
 				void this.flush();
@@ -104,7 +107,23 @@ export class Client {
 	/** Replaces what the client offers, and tells cohesiond now when connected. */
 	async offer(offers: ClientCapabilities): Promise<void> {
 		this.options = { ...this.options, offers };
+		for (const actor of this.usages.keys()) {
+			if (!offers.actors.some((offered) => offered.identifier === actor)) this.usages.delete(actor);
+		}
 		await this.session?.offer(offers);
+	}
+
+	/**
+	 * Says how much of its limits actor `actor` has used, replacing what it
+	 * said before, now when connected and again on every new session;
+	 * neither `context` nor `plan`, it says nothing. Settles with the reply,
+	 * at once while offline: a `CohesionError` when refused, as a daemon
+	 * that doesn't know usage refuses it.
+	 */
+	usage(actor: string, usage: ActorUsage): Promise<void> {
+		if (usage.context || usage.plan?.length) this.usages.set(actor, usage);
+		else this.usages.delete(actor);
+		return this.session ? this.session.usage(actor, usage) : Promise.resolve();
 	}
 
 	/** Runs a request on the current session; fails while offline. */

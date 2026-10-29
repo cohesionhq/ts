@@ -27,7 +27,9 @@ backoff when the session drops (never after an `evicted` frame), offers the
 client's `hello` again, runs `onConnect` for the client to report the tasks
 still going on, then sends the actor task updates held while it was away, in
 order. An update that may have been stored before its session dropped is
-checked against the transcript before it is sent again.
+checked against the transcript before it is sent again. `usage` says how
+much of its limits an actor has used (its context window, its plan's
+limits); the client says each actor's last usage again on every new session.
 
 ```ts
 const client = new Client(server, {
@@ -37,6 +39,7 @@ const client = new Client(server, {
 });
 void client.run();
 await client.report(taskId, { kind: 'message', content: { kind: 'text', text: 'Done.' } });
+await client.usage(myActor.identifier, { context: { used_tokens: 41_000, total_tokens: 200_000 } });
 ```
 
 ## Types
@@ -44,7 +47,7 @@ await client.report(taskId, { kind: 'message', content: { kind: 'text', text: 'D
 `src/generated.ts` is cohesion-core's `TsWire` output, the same file the web
 UI uses: every request, reply and model. `bun run generate` rewrites it from
 a cohesion checkout (`../cohesion`, or `$COHESION`). The session's own frames
-(`hello` offers, calls, actor task updates) aren't generated, so
+(`hello` offers, calls, actor task updates, actor usage) aren't generated, so
 `src/frames.ts` writes them out from `cohesion-core/src/protocol/envelope.rs`
 and `capabilities.rs`; keep it in step with them.
 

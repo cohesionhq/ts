@@ -8,6 +8,7 @@ import type {
 	ActorMode,
 	ActorModel,
 	ActorTaskStatus,
+	ActorUsage,
 	ActorUserContent,
 	InvalidationBatch,
 	NoArgs,
@@ -146,7 +147,15 @@ export type ClientFrame =
 	| { type: 'subscribe'; id: number }
 	| ({ type: 'hello'; id: number } & ClientCapabilities)
 	| ({ type: 'callResult'; call_id: number } & ({ ok: ClientResult } | { error: string }))
-	| ({ type: 'actorTaskUpdate'; id: number; task_id: number } & ActorTaskReport);
+	| ({ type: 'actorTaskUpdate'; id: number; task_id: number } & ActorTaskReport)
+	| ActorUsageUpdate;
+
+/**
+ * How much of its limits one of the client's actors has used, replacing
+ * what it said before; neither `context` nor `plan`, it says nothing
+ * (`ActorUsageUpdate`).
+ */
+export type ActorUsageUpdate = { type: 'actorUsage'; id: number; actor: string } & ActorUsage;
 
 /** Why the daemon ended a client's session; reconnecting after either is wrong. */
 export type EvictionReason = 'replaced' | 'revoked';

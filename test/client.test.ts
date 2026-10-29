@@ -112,3 +112,23 @@ test('a tool use stored before its session dropped settles with its id, to end i
 	expect(updates(daemon.heard)).toEqual([{ kind: 'text', text: 'before' }, { kind: 'toolUse', tool: 'Edit', summary: 'a.ts' }, 'toolEnd']);
 	client.stop();
 });
+
+test("each actor's last usage is said again on a new session; a cleared one isn't", async () => {
+	const daemon = fakeDaemon();
+	let online = () => {};
+	const connected = new Promise<void>((resolve) => (online = resolve));
+	const client = new Client(localServer(daemon.path, 'test'), {
+		offers,
+		onCall: async () => ({ kind: 'accepted' }),
+		onState: (state) => state.kind === 'online' && online(),
+	});
+	await client.usage('a', { context: { used_tokens: 1, total_tokens: 10 } });
+	await client.usage('b', { plan: [{ label: '5-hour limit', used: 0.5 }] });
+	await client.usage('b', {});
+	void client.run();
+	await connected;
+	await client.usage('a', { context: { used_tokens: 2, total_tokens: 10 } });
+	const said = daemon.heard.flatMap((frame) => (frame.type === 'actorUsage' ? [[frame.actor, frame.context?.used_tokens]] : []));
+	expect(said).toEqual([['a', 1], ['a', 2]]);
+	client.stop();
+});

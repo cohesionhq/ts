@@ -15,7 +15,7 @@ import type {
 	RequestType,
 	ServerFrame,
 } from './frames.ts';
-import type { ActorTaskMessage, Invalidation, Replies, Vocabulary } from './generated.ts';
+import type { ActorTaskMessage, ActorUsage, Invalidation, Replies, Vocabulary } from './generated.ts';
 import type { Server } from './server.ts';
 import { connectTransport, type Transport } from './transport.ts';
 
@@ -117,6 +117,11 @@ export class Session {
 	async report(taskId: number, report: ActorTaskReport): Promise<ActorTaskMessage | void> {
 		const data = await this.exchange((id) => ({ type: 'actorTaskUpdate', id, task_id: taskId, ...report }));
 		if (report.kind === 'message') return data as ActorTaskMessage;
+	}
+
+	/** Says how much of its limits actor `actor` has used, replacing what it said before. */
+	async usage(actor: string, usage: ActorUsage): Promise<void> {
+		await this.exchange((id) => ({ type: 'actorUsage', id, actor, ...usage }));
 	}
 
 	close(): void {
