@@ -167,8 +167,13 @@ export type ActorMessageContent =
 }
 	| {
 	kind: "toolUse";
-	/** The tool, such as "Edit". */
+	/** The tool, such as "Edit", as the actor names it. */
 	tool: string;
+	/**
+	 * What kind of tool it is, as the actor's client classifies it;
+	 * `"other"` when left out.
+	 */
+	category?: ActorToolKind;
 	/** What it did, in a line, such as "src/main.rs". */
 	summary: string;
 	/**
@@ -367,6 +372,27 @@ export type ActorTaskStatus =
 	| "needsAttention"
 	| "idle"
 	| "failed";
+
+/**
+ * What kind of tool an actor ran, which its client decides from the
+ * tool's name, since only the client knows its actor's tools.
+ *
+ * - `"command"`: runs a shell command (Claude Code's `Bash`).
+ * - `"read"`: reads a file or directory (`Read`).
+ * - `"edit"`: changes files (`Edit`, `Write`).
+ * - `"search"`: searches files or their contents (`Grep`, `Glob`).
+ * - `"web"`: fetches or searches the web (`WebFetch`, `WebSearch`).
+ * - `"agent"`: hands work to another agent (`Agent`).
+ * - `"other"`: anything else, and a tool its client didn't classify.
+ */
+export type ActorToolKind =
+	| "command"
+	| "read"
+	| "edit"
+	| "search"
+	| "web"
+	| "agent"
+	| "other";
 
 /**
  * What the user says in an actor task, tagged by `kind`.
