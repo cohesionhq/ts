@@ -1,0 +1,23 @@
+{
+	"name": "cohesion-ts",
+	"version": "0.1.0",
+	"description": "A TypeScript client for cohesiond, over its Unix socket or its mTLS WebSocket.",
+	"type": "module",
+	"module": "index.ts",
+	"exports": {
+		".": "./index.ts"
+	},
+	"files": [
+		"index.ts",
+		"src"
+	],
+	"scripts": {
+		"generate": "./scripts/generate.sh",
+		"check": "tsc --noEmit -p .",
+		"test": "bun test"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"typescript": "^7"
+	}
+}
