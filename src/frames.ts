@@ -63,13 +63,26 @@ export interface ClientCapabilities {
 
 // ---- Calls -----------------------------------------------------------------
 
-/** The calls to an actor, each answered with `accepted`. */
+/**
+ * An image the user sent, or an actor shows (`ClientImage`): PNG, JPEG, GIF
+ * or WebP, at most 5 MB once base64-encoded.
+ */
+export interface ClientImage {
+	/** `image/png`, `image/jpeg`, `image/gif` or `image/webp`. */
+	media_type: string;
+	/** The image, base64-encoded. */
+	data: string;
+}
+
+/** The calls to an actor (`ClientCall`), each answered with `accepted`. */
 export type ActorCall =
 	| {
 			kind: 'startActorTask';
 			actor: string;
 			task_id: number;
 			prompt: string;
+			/** The images attached to the prompt; a daemon from before images leaves it out. */
+			images?: ClientImage[];
 			/** `null` for the actor's default. */
 			mode: string | null;
 			model: string | null;
@@ -81,8 +94,11 @@ export type ActorCall =
 			task_id: number;
 			message_id: number;
 			content: ActorUserContent;
+			/** The images attached to it; a daemon from before images leaves it out. */
+			images?: ClientImage[];
 	  }
-	| { kind: 'stopActorTask'; actor: string; task_id: number };
+	| { kind: 'stopActorTask'; actor: string; task_id: number }
+	| { kind: 'setActorTaskMode'; actor: string; task_id: number; mode: string };
 
 /**
  * What the daemon asks a client to do. Model turns and connector calls are
@@ -100,9 +116,12 @@ export type ClientResult = { kind: 'accepted' } | { kind: string; [field: string
 
 // ---- Actor updates ---------------------------------------------------------
 
-/** One thing an actor reports about a task, tagged by `kind`. */
+/**
+ * One thing an actor reports about a task, tagged by `kind`
+ * (`ActorTaskReport`). A message's `images` show below it; left out, none.
+ */
 export type ActorTaskReport =
-	| { kind: 'message'; content: ActorMessageContent }
+	| { kind: 'message'; content: ActorMessageContent; images?: ClientImage[] }
 	| { kind: 'status'; status: ActorTaskStatus }
 	| { kind: 'progress'; progress: string | null };
 

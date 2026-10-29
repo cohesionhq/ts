@@ -298,6 +298,24 @@ export interface ActorTask {
 	last_activity_at: number;
 	/** Where it stands, as its actor last reported. */
 	status: ActorTaskStatus;
+	/**
+	 * Whether its actor finished a stretch of work, done or failed, since
+	 * the user last read it; stopping it, or its client going away, doesn't.
+	 */
+	unread: boolean;
+}
+
+/**
+ * An image that came with a message in an actor task: one the user
+ * attached, or one the actor showed.
+ */
+export interface ActorTaskAttachment {
+	id: number;
+	message_id: number;
+	/** `image/png`, `image/jpeg`, `image/gif` or `image/webp`. */
+	media_type: string;
+	/** The image, base64-encoded. */
+	data: string;
 }
 
 /** One entry in an actor task's transcript. */
@@ -309,6 +327,11 @@ export interface ActorTaskMessage {
 	content: ActorTaskMessageContent;
 	/** Whether the user has answered it; only a request can be. */
 	answered: boolean;
+	/**
+	 * How many images came with it, the user's or the actor's;
+	 * `ListActorTaskMessageAttachments` fetches them.
+	 */
+	attachment_count: number;
 }
 
 /**
@@ -400,17 +423,6 @@ export interface AddFeedRequest {
 	full_page_policy?: FeedFullPagePolicy;
 	/** `"coherence"` when absent. */
 	parser?: ArticleParser;
-}
-
-/**
- * An image to attach to a message: PNG, JPEG, GIF or WebP, at most 5 MB
- * once base64-encoded.
- */
-export interface AgentAttachmentUpload {
-	/** `image/png`, `image/jpeg`, `image/gif` or `image/webp`. */
-	media_type: string;
-	/** The image, base64-encoded. */
-	data: string;
 }
 
 /**
@@ -1320,7 +1332,8 @@ export type ExtensionPermissionKind =
 	| "services"
 	| "usage"
 	| "intelligence"
-	| "notifications";
+	| "notifications"
+	| "actors";
 
 /**
  * An extension script as downloaded or given, for review before installing it with
@@ -1557,7 +1570,8 @@ export interface GetResourceRequest {
  * `onActivityStarted(activity)` when an activity starts,
  * `activity:updated` `onActivityUpdated(activity)` when its progress or
  * status changes and `activity:ended` `onActivityEnded(activity)` when it
- * ends; `agent:turn:start` calls
+ * ends; `actor:moved` calls `onActorMoved(task)` when an actor task's
+ * status changes; `agent:turn:start` calls
  * `onAgentTurnStart(agent)` when an agent starts answering the user and
  * `agent:turn:end` `onAgentTurnEnd(agent)` when it finishes; `day:start` calls `onDayStart()` at 6:00 and
  * `day:end` calls `onDayEnd()` at 23:00, and `hour:start` calls
@@ -1601,6 +1615,7 @@ export type HookKind =
 	| "activity:started"
 	| "activity:updated"
 	| "activity:ended"
+	| "actor:moved"
 	| "day:start"
 	| "day:end"
 	| "hour:start"
@@ -1614,6 +1629,17 @@ export interface HookWording {
 	extension_clause: string;
 	/** As an agent's cue or run; an agent never hears its own conversation. */
 	cue_clause: string;
+}
+
+/**
+ * An image to attach to a message to an agent or in an actor task: PNG,
+ * JPEG, GIF or WebP, at most 5 MB once base64-encoded.
+ */
+export interface ImageUpload {
+	/** `image/png`, `image/jpeg`, `image/gif` or `image/webp`. */
+	media_type: string;
+	/** The image, base64-encoded. */
+	data: string;
 }
 
 /**
@@ -2039,6 +2065,14 @@ export interface ListActivitiesRequest {
 	limit: number;
 }
 
+/**
+ * Lists the images attached to actor task message `message_id`, in the
+ * order sent.
+ */
+export interface ListActorTaskMessageAttachmentsRequest {
+	message_id: number;
+}
+
 /** Lists what was said in actor task `task_id`, oldest first. */
 export interface ListActorTaskMessagesRequest {
 	task_id: number;
@@ -2227,6 +2261,14 @@ export type ListedClient = {
 	/** Whether the client has a session open with the daemon now. */
 	online: boolean;
 } & Client;
+
+/**
+ * Marks actor task `task_id` read; the next stretch of work its actor
+ * finishes marks it unread again.
+ */
+export interface MarkActorTaskReadRequest {
+	task_id: number;
+}
 
 /** Marks agent `agent_id`'s conversation read. */
 export interface MarkAgentReadRequest {
@@ -2867,13 +2909,14 @@ export interface SearchWorkspaceRequest {
 }
 
 /**
- * Says `content` in actor task `task_id`: more to do, which starts a task
- * that is done or failed again, or a response to one of its requests. Its
- * client must be online.
+ * Says `content` in actor task `task_id`, with any images in
+ * `attachments`: more to do, which starts a task that is done or failed
+ * again, or a response to one of its requests. Its client must be online.
  */
 export interface SendActorTaskMessageRequest {
 	task_id: number;
 	content: ActorUserContent;
+	attachments?: ImageUpload[] | null;
 }
 
 /**
@@ -2887,7 +2930,7 @@ export interface SendActorTaskMessageRequest {
 export interface SendAgentMessageRequest {
 	agent_id: number;
 	message: string;
-	attachments?: AgentAttachmentUpload[] | null;
+	attachments?: ImageUpload[] | null;
 }
 
 /** Why a command failed; `field` names the offending input when there is one. */
@@ -2928,6 +2971,15 @@ export interface ServiceManifest {
 	description: string | null;
 	/** The functions, by name; each name is a JavaScript identifier. */
 	functions: Record<string, ServiceFunctionManifest>;
+}
+
+/**
+ * Switches actor task `task_id` to mode `mode`, one its actor offers, from
+ * its next step on, even while it works. Its client must be online.
+ */
+export interface SetActorTaskModeRequest {
+	task_id: number;
+	mode: string;
 }
 
 /**
@@ -3065,9 +3117,10 @@ export interface SetWorkspaceEmojiRequest {
 }
 
 /**
- * Hands actor `actor_id` a new task, `prompt`, in the mode, on the model
- * and at the effort given (the actor's defaults when left out), titled by
- * the prompt's first line. Its client must be online.
+ * Hands actor `actor_id` a new task, `prompt`, with any images in
+ * `attachments`, in the mode, on the model and at the effort given (the
+ * actor's defaults when left out), titled by the prompt's first line. Its
+ * client must be online.
  */
 export interface StartActorTaskRequest {
 	actor_id: number;
@@ -3075,6 +3128,7 @@ export interface StartActorTaskRequest {
 	mode?: string | null;
 	model?: string | null;
 	effort?: string | null;
+	attachments?: ImageUpload[] | null;
 }
 
 /**
@@ -3592,14 +3646,20 @@ export interface Requests {
 	/** Lists actor tasks, most recently active first. */
 	listActorTasks: ListActorTasksRequest;
 	getActorTask: GetActorTaskRequest;
+	/** Marks actor task `task_id` read. */
+	markActorTaskRead: MarkActorTaskReadRequest;
 	/** Lists what was said in an actor task, oldest first. */
 	listActorTaskMessages: ListActorTaskMessagesRequest;
+	/** Lists the images attached to an actor task message. */
+	listActorTaskMessageAttachments: ListActorTaskMessageAttachmentsRequest;
 	/** Hands an actor a new task, through its client. */
 	startActorTask: StartActorTaskRequest;
 	/** Says something in an actor task, through its client. */
 	sendActorTaskMessage: SendActorTaskMessageRequest;
 	/** Stops what an actor task is doing, leaving it idle. */
 	stopActorTask: StopActorTaskRequest;
+	/** Switches an actor task's mode, through its client. */
+	setActorTaskMode: SetActorTaskModeRequest;
 	/** Lists every service a `connector`-granted extension reaches. */
 	listConnectorServices: NoArgs;
 	/** Asks connector extension `extension_id` for its sign-in page. */
@@ -3942,14 +4002,20 @@ export interface Replies {
 	/** Lists actor tasks, most recently active first. */
 	listActorTasks: ActorTask[];
 	getActorTask: ActorTask;
+	/** Marks actor task `task_id` read. */
+	markActorTaskRead: ActorTask;
 	/** Lists what was said in an actor task, oldest first. */
 	listActorTaskMessages: ActorTaskMessage[];
+	/** Lists the images attached to an actor task message. */
+	listActorTaskMessageAttachments: ActorTaskAttachment[];
 	/** Hands an actor a new task, through its client. */
 	startActorTask: ActorTask;
 	/** Says something in an actor task, through its client. */
 	sendActorTaskMessage: ActorTaskMessage;
 	/** Stops what an actor task is doing, leaving it idle. */
 	stopActorTask: ActorTask;
+	/** Switches an actor task's mode, through its client. */
+	setActorTaskMode: ActorTask;
 	/** Lists every service a `connector`-granted extension reaches. */
 	listConnectorServices: ConnectorService[];
 	/** Asks connector extension `extension_id` for its sign-in page. */
