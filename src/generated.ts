@@ -306,8 +306,8 @@ export interface ActorTask {
 	/** The model's reasoning effort; `null` for the model's default. */
 	effort: string | null;
 	started_at: number;
-	/** When anything was last said in it, which orders the tasks. */
-	last_activity_at: number;
+	/** When its status last changed, which orders the tasks. */
+	status_changed_at: number;
 	/** Where it stands, as its actor last reported. */
 	status: ActorTaskStatus;
 	/**
@@ -315,6 +315,13 @@ export interface ActorTask {
 	 * the user last read it; stopping it, or its client going away, doesn't.
 	 */
 	unread: boolean;
+	/** When the user last read it; `null` if they never have. */
+	read_at: number | null;
+	/**
+	 * How full its context window is, as its actor last reported; `null`
+	 * until it says.
+	 */
+	context: ContextUsage | null;
 }
 
 /**
@@ -363,7 +370,7 @@ export interface ActorTaskSearchHit {
 	id: number;
 	actor_id: number;
 	title: string;
-	last_activity_at: number;
+	status_changed_at: number;
 	/**
 	 * A few words of the message that matched, in Markdown; `null` when
 	 * the title matched best.
@@ -415,13 +422,11 @@ export type ActorToolKind =
 	| "other";
 
 /**
- * How much of its limits an actor has used, as its client last reported:
- * its context window, and the plan it runs on. Either may be left out
- * when the actor doesn't say.
+ * How much of its plan's limits an actor has used, as its client last
+ * reported. A task's context window is its own, which it reports as the
+ * task's `context`.
  */
 export interface ActorUsage {
-	/** Its context window. Left out, unknown. */
-	context?: ContextUsage | null;
 	/**
 	 * Its plan's limits, such as a five-hour and a weekly one, in the
 	 * order to show them. Left out, none.
@@ -989,9 +994,9 @@ export interface ConnectorService {
 	error: string | null;
 }
 
-/** How full an actor's context window is, in tokens. */
+/** How full a task's context window is, in tokens. */
 export interface ContextUsage {
-	/** The tokens the context holds now. */
+	/** The tokens the context holds now, never fewer than none. */
 	used_tokens: number;
 	/** The most it can hold, more than zero. */
 	total_tokens: number;
@@ -1038,6 +1043,11 @@ export type CreateIntelligenceEndpointRequest = {
 	 */
 	name?: string | null;
 	api_key?: string | null;
+	/**
+	 * The page where a person sees what the endpoint has used. Defaults to
+	 * the provider's usage page; a custom endpoint has none.
+	 */
+	usage_url?: string | null;
 } & IntelligenceEndpointPreset;
 
 /**
@@ -2161,7 +2171,7 @@ export interface ListActorTaskMessagesRequest {
 }
 
 /**
- * Lists actor tasks, most recently active first: actor `actor_id`'s, or
+ * Lists actor tasks, latest status change first: actor `actor_id`'s, or
  * every actor's.
  */
 export interface ListActorTasksRequest {
@@ -2350,7 +2360,7 @@ export type ListedClient = {
 } & Client;
 
 /**
- * Marks actor task `task_id` read; the next stretch of work its actor
+ * Marks actor task `task_id` read, now; the next stretch of work its actor
  * finishes marks it unread again.
  */
 export interface MarkActorTaskReadRequest {
@@ -2562,6 +2572,8 @@ export type RedactedEndpointBackend =
 	provider_identifier: string;
 	dialect: Dialect;
 	base_url: string;
+	/** The page where a person sees what the endpoint has used. */
+	usage_url: string | null;
 }
 	| {
 	kind: "client";
@@ -3189,6 +3201,15 @@ export interface SetIntelligenceDefaultRequest {
 	endpoint_model_id: number;
 }
 
+/**
+ * Sets where a person sees what endpoint `id` has used, or with no
+ * `usage_url` removes it. Refused for a client's endpoint.
+ */
+export interface SetIntelligenceEndpointUsageUrlRequest {
+	id: number;
+	usage_url: string | null;
+}
+
 /** Shows kind `kind_id` in workspace `workspace_id`, or hides it there. */
 export interface SetResourceKindShownRequest {
 	workspace_id: number;
@@ -3604,6 +3625,8 @@ export interface Requests {
 	listIntelligenceEndpoints: NoArgs;
 	createIntelligenceEndpoint: CreateIntelligenceEndpointRequest;
 	deleteIntelligenceEndpoint: DeleteIntelligenceEndpointRequest;
+	/** Sets or removes where a person sees what an endpoint has used. */
+	setIntelligenceEndpointUsageUrl: SetIntelligenceEndpointUsageUrlRequest;
 	/** Imports a model into an endpoint, from the catalog when it lists it. */
 	addEndpointModel: AddEndpointModelRequest;
 	/** Removes an endpoint's model, unsetting any tier that uses it. */
@@ -3753,7 +3776,7 @@ export interface Requests {
 	 * has used.
 	 */
 	listActorUsage: NoArgs;
-	/** Lists actor tasks, most recently active first. */
+	/** Lists actor tasks, latest status change first. */
 	listActorTasks: ListActorTasksRequest;
 	getActorTask: GetActorTaskRequest;
 	/**
@@ -3970,6 +3993,8 @@ export interface Replies {
 	listIntelligenceEndpoints: RedactedIntelligenceEndpoint[];
 	createIntelligenceEndpoint: RedactedIntelligenceEndpoint;
 	deleteIntelligenceEndpoint: RedactedIntelligenceEndpoint;
+	/** Sets or removes where a person sees what an endpoint has used. */
+	setIntelligenceEndpointUsageUrl: RedactedIntelligenceEndpoint;
 	/** Imports a model into an endpoint, from the catalog when it lists it. */
 	addEndpointModel: EndpointModel;
 	/** Removes an endpoint's model, unsetting any tier that uses it. */
@@ -4119,7 +4144,7 @@ export interface Replies {
 	 * has used.
 	 */
 	listActorUsage: ListedActorUsage[];
-	/** Lists actor tasks, most recently active first. */
+	/** Lists actor tasks, latest status change first. */
 	listActorTasks: ActorTask[];
 	getActorTask: ActorTask;
 	/**

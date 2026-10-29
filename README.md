@@ -28,8 +28,9 @@ client's `hello` again, runs `onConnect` for the client to report the tasks
 still going on, then sends the actor task updates held while it was away, in
 order. An update that may have been stored before its session dropped is
 checked against the transcript before it is sent again. `usage` says how
-much of its limits an actor has used (its context window, its plan's
-limits); the client says each actor's last usage again on every new session.
+much of its plan's limits an actor has used; the client says each actor's
+last usage again on every new session. A task's context window is a
+`context` report.
 
 ```ts
 const client = new Client(server, {
@@ -39,7 +40,8 @@ const client = new Client(server, {
 });
 void client.run();
 await client.report(taskId, { kind: 'message', content: { kind: 'text', text: 'Done.' } });
-await client.usage(myActor.identifier, { context: { used_tokens: 41_000, total_tokens: 200_000 } });
+await client.report(taskId, { kind: 'context', context: { used_tokens: 41_000, total_tokens: 200_000 } });
+await client.usage(myActor.identifier, { plan: [{ label: '5-hour limit', used: 0.72 }] });
 ```
 
 ## Types

@@ -122,13 +122,13 @@ test("each actor's last usage is said again on a new session; a cleared one isn'
 		onCall: async () => ({ kind: 'accepted' }),
 		onState: (state) => state.kind === 'online' && online(),
 	});
-	await client.usage('a', { context: { used_tokens: 1, total_tokens: 10 } });
+	await client.usage('a', { plan: [{ label: '5-hour limit', used: 0.1 }] });
 	await client.usage('b', { plan: [{ label: '5-hour limit', used: 0.5 }] });
 	await client.usage('b', {});
 	void client.run();
 	await connected;
-	await client.usage('a', { context: { used_tokens: 2, total_tokens: 10 } });
-	const said = daemon.heard.flatMap((frame) => (frame.type === 'actorUsage' ? [[frame.actor, frame.context?.used_tokens]] : []));
-	expect(said).toEqual([['a', 1], ['a', 2]]);
+	await client.usage('a', { plan: [{ label: '5-hour limit', used: 0.2 }] });
+	const said = daemon.heard.flatMap((frame) => (frame.type === 'actorUsage' ? [[frame.actor, frame.plan?.[0]?.used]] : []));
+	expect(said).toEqual([['a', 0.1], ['a', 0.2]]);
 	client.stop();
 });

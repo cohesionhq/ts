@@ -114,14 +114,15 @@ export class Client {
 	}
 
 	/**
-	 * Says how much of its limits actor `actor` has used, replacing what it
-	 * said before, now when connected and again on every new session;
-	 * neither `context` nor `plan`, it says nothing. Settles with the reply,
+	 * Says how much of its plan's limits actor `actor` has used, replacing
+	 * what it said before, now when connected and again on every new
+	 * session; with no `plan`, it says nothing. A task's context is a
+	 * `context` report instead. Settles with the reply,
 	 * at once while offline: a `CohesionError` when refused, as a daemon
 	 * that doesn't know usage refuses it.
 	 */
 	usage(actor: string, usage: ActorUsage): Promise<void> {
-		if (usage.context || usage.plan?.length) this.usages.set(actor, usage);
+		if (usage.plan?.length) this.usages.set(actor, usage);
 		else this.usages.delete(actor);
 		return this.session ? this.session.usage(actor, usage) : Promise.resolve();
 	}

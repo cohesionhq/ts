@@ -10,6 +10,7 @@ import type {
 	ActorTaskStatus,
 	ActorUsage,
 	ActorUserContent,
+	ContextUsage,
 	InvalidationBatch,
 	NoArgs,
 	Replies,
@@ -121,13 +122,15 @@ export type ClientResult = { kind: 'accepted' } | { kind: string; [field: string
  * One thing an actor reports about a task, tagged by `kind`
  * (`ActorTaskReport`). A message's `images` show below it; left out, none.
  * A `toolEnd` names the `toolUse` message whose tool finished by the `id`
- * its reply carried.
+ * its reply carried. A `context` replaces how full the task's context
+ * window was said to be.
  */
 export type ActorTaskReport =
 	| { kind: 'message'; content: ActorSaidContent; images?: ClientImage[] }
 	| { kind: 'status'; status: ActorTaskStatus }
 	| { kind: 'progress'; progress: string | null }
-	| { kind: 'toolEnd'; message_id: number };
+	| { kind: 'toolEnd'; message_id: number }
+	| { kind: 'context'; context: ContextUsage };
 
 /**
  * What an actor says, as it sends it: a `toolUse` leaves out `ended_at`,
@@ -151,9 +154,9 @@ export type ClientFrame =
 	| ActorUsageUpdate;
 
 /**
- * How much of its limits one of the client's actors has used, replacing
- * what it said before; neither `context` nor `plan`, it says nothing
- * (`ActorUsageUpdate`).
+ * How much of its plan's limits one of the client's actors has used,
+ * replacing what it said before; with no `plan`, it says nothing
+ * (`ActorUsageUpdate`). A task's context is its own `context` report.
  */
 export type ActorUsageUpdate = { type: 'actorUsage'; id: number; actor: string } & ActorUsage;
 
