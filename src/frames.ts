@@ -83,6 +83,12 @@ export type ActorCall =
 			actor: string;
 			task_id: number;
 			prompt: string;
+			/**
+			 * The title the task was started with, or `null` when Cohesion
+			 * took the prompt's first line, which a `title` report may
+			 * replace; a daemon from before titles leaves it out.
+			 */
+			title?: string | null;
 			/** The images attached to the prompt; a daemon from before images leaves it out. */
 			images?: ClientImage[];
 			/** `null` for the actor's default. */
@@ -123,14 +129,17 @@ export type ClientResult = { kind: 'accepted' } | { kind: string; [field: string
  * (`ActorTaskReport`). A message's `images` show below it; left out, none.
  * A `toolEnd` names the `toolUse` message whose tool finished by the `id`
  * its reply carried. A `context` replaces how full the task's context
- * window was said to be.
+ * window was said to be. A `title` renames the task and its activity,
+ * replacing the current title (its first line, cut past 80 characters;
+ * never blank); the same title again changes nothing.
  */
 export type ActorTaskReport =
 	| { kind: 'message'; content: ActorSaidContent; images?: ClientImage[] }
 	| { kind: 'status'; status: ActorTaskStatus }
 	| { kind: 'progress'; progress: string | null }
 	| { kind: 'toolEnd'; message_id: number }
-	| { kind: 'context'; context: ContextUsage };
+	| { kind: 'context'; context: ContextUsage }
+	| { kind: 'title'; title: string };
 
 /**
  * What an actor says, as it sends it: a `toolUse` leaves out `ended_at`,

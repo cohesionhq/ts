@@ -30,7 +30,9 @@ order. An update that may have been stored before its session dropped is
 checked against the transcript before it is sent again. `usage` says how
 much of its plan's limits an actor has used; the client says each actor's
 last usage again on every new session. A task's context window is a
-`context` report.
+`context` report, and a `title` report renames a task; `startActorTask`
+carries the title it was started with, or `null` when Cohesion took the
+prompt's first line and a client may name it.
 
 ```ts
 const client = new Client(server, {

@@ -524,11 +524,27 @@ export interface AgentCodeExecution {
 	/** What the script does, as the agent described it. */
 	title: string;
 	code: string;
-	/** The script's result, when it succeeded. */
-	result: string | null;
-	/** Why the script failed, when it did. */
-	error: string | null;
+	/** How the script ended. */
+	outcome: AgentCodeOutcome;
 }
+
+/**
+ * How a script the agent ran ended, tagged by `status`.
+ *
+ * - `"succeeded"`: it ran to the end, returning `result`.
+ * - `"failed"`: it threw or ran out of time, for `error`.
+ * - `"cancelled"`: the user stopped the agent's turn while it ran.
+ */
+export type AgentCodeOutcome =
+	| {
+	status: "succeeded";
+	result: string;
+}
+	| {
+	status: "failed";
+	error: string;
+}
+	| { status: "cancelled" };
 
 /**
  * Where a cue wakes its agent, and on what model.
@@ -992,6 +1008,11 @@ export interface ConnectorService {
 	icon: string | null;
 	/** Why the extension couldn't describe its service. */
 	error: string | null;
+	/**
+	 * What to do on the sign-in page, when the service doesn't end its
+	 * sign-in by showing a code.
+	 */
+	sign_in_hint: string | null;
 }
 
 /** How full a task's context window is, in tokens. */
@@ -1049,6 +1070,22 @@ export type CreateIntelligenceEndpointRequest = {
 	 */
 	usage_url?: string | null;
 } & IntelligenceEndpointPreset;
+
+/**
+ * Saves a way of looking at a workspace's tasks under a name, last among
+ * its views.
+ */
+export interface CreateSavedTaskViewRequest {
+	workspace_id: number;
+	/** Unique, ignoring case, among the workspace's views. */
+	name: string;
+	scope: TaskViewScope;
+	tags: TagFilter;
+	/** Every priority when empty. */
+	priorities: TaskPriority[];
+	sort: TaskSort;
+	descending: boolean;
+}
 
 /**
  * Creates a tag for `entity` in workspace `workspace_id`. A workspace has
@@ -1167,6 +1204,12 @@ export interface DeleteResourceRequest {
 	resource_id: number;
 }
 
+/** Deletes saved view `view_id`; its tasks stay as they are. */
+export interface DeleteSavedTaskViewRequest {
+	workspace_id: number;
+	view_id: number;
+}
+
 /**
  * Deletes tag `tag_id` of workspace `workspace_id`, taking it off every
  * task or article it was on.
@@ -1200,7 +1243,8 @@ export interface DeleteWorkspaceRequest {
 export type Dialect =
 	| "chatCompletions"
 	| "messages"
-	| "responses";
+	| "responses"
+	| "statelessResponses";
 
 /** A piece of text in a workspace; journals are documents with a `journal_date`. */
 export interface Document {
@@ -1790,6 +1834,12 @@ export interface IntelligenceAgent {
 	 */
 	activity: string | null;
 	/**
+	 * When the running turn of the agent's conversation started, in Unix
+	 * seconds; the user can stop it. `null` when none is running;
+	 * background and detached runs don't count.
+	 */
+	foreground_started: number | null;
+	/**
 	 * Whether the agent has posted since the user last read its
 	 * conversation.
 	 */
@@ -2133,6 +2183,7 @@ export type Invalidation =
 	| { kind: "intelligence" }
 	| { kind: "clients" }
 	| { kind: "tags"; id: number }
+	| { kind: "savedTaskViews"; id: number }
 	| { kind: "extensionUpdates" }
 	| { kind: "memories" }
 	| { kind: "activities" }
@@ -2302,6 +2353,11 @@ export interface ListResourcesRequest {
 	descending: boolean;
 }
 
+/** Lists a workspace's saved task views, in their order. */
+export interface ListSavedTaskViewsRequest {
+	workspace_id: number;
+}
+
 /** Lists workspace `workspace_id`'s tags for `entity`, in their order. */
 export interface ListTagsRequest {
 	workspace_id: number;
@@ -2327,8 +2383,8 @@ export interface ListTasksRequest {
 	start_date?: DayFilter | null;
 	/** Only tasks whose due day matches. */
 	due_date?: DayFilter | null;
-	/** Only tasks with this tag. */
-	tag_id?: number | null;
+	/** Only tasks with every tag in `with` and none in `without`. */
+	tags?: TagFilter;
 	/** Creation order when absent. */
 	sort?: TaskSort;
 	/** Reverses `sort`; tasks without a value for it still come last. */
@@ -2576,6 +2632,17 @@ export type RedactedEndpointBackend =
 	usage_url: string | null;
 }
 	| {
+	kind: "account";
+	/** The models.dev provider, such as `"openai"`. */
+	provider_identifier: string;
+	dialect: Dialect;
+	base_url: string;
+	/** The connector account the endpoint signs in with. */
+	account_id: number;
+	/** The page where a person sees what the endpoint has used. */
+	usage_url: string | null;
+}
+	| {
 	kind: "client";
 	/** The client serving the endpoint. */
 	client_id: number;
@@ -2687,6 +2754,13 @@ export interface RenameFeedRequest {
 	title: string;
 }
 
+/** Renames saved view `view_id`. */
+export interface RenameSavedTaskViewRequest {
+	workspace_id: number;
+	view_id: number;
+	name: string;
+}
+
 /** Renames tag `tag_id` of workspace `workspace_id`. */
 export interface RenameTagRequest {
 	workspace_id: number;
@@ -2734,6 +2808,16 @@ export interface ReorderFeedsRequest {
 export interface ReorderIntelligenceAgentsRequest {
 	/** Every pinned agent, in its new order. */
 	agent_ids: number[];
+}
+
+/**
+ * Puts a workspace's saved task views in the order of `view_ids`, first to
+ * last.
+ */
+export interface ReorderSavedTaskViewsRequest {
+	workspace_id: number;
+	/** Every view in the workspace, in its new order. */
+	view_ids: number[];
 }
 
 /**
@@ -2915,6 +2999,29 @@ export interface SavedArticle {
 }
 
 /**
+ * A way of looking at a workspace's tasks kept under a name: which tasks it
+ * lists, the tags and priorities that narrow them, and the order they
+ * come in.
+ */
+export interface SavedTaskView {
+	id: number;
+	workspace_id: number;
+	/** Unique, ignoring case, among the workspace's views. */
+	name: string;
+	/** The tasks listed before `tags` narrow them. */
+	scope: TaskViewScope;
+	/** The tags a listed task must have, and those it must not. */
+	tags: TagFilter;
+	/** The priorities a listed task has one of; every priority when empty. */
+	priorities: TaskPriority[];
+	sort: TaskSort;
+	/** Reverses `sort`. */
+	descending: boolean;
+	/** Where the view sits among its workspace's views; lower comes first. */
+	sort_order: number;
+}
+
+/**
  * Sets both dates of task `task_id` in a workspace, each a `"YYYY-MM-DD"`
  * day; `null` clears one. Any other text is a validation error.
  */
@@ -3039,8 +3146,9 @@ export interface SendActorTaskMessageRequest {
 /**
  * Sends `message` to agent `agent_id` in its foreground chat, with any
  * images in `attachments`. `message` may be empty when there are images.
- * The message is saved before the reply, which comes at once; the agent's
- * turn on it is queued behind any it is running. What the turn posts
+ * The message is saved before the reply, which comes at once. A turn the
+ * agent is running takes it in before its next model call; otherwise the
+ * agent's turn on it is queued behind any it is answering. What the turn posts
  * arrives with the agent's invalidations, and the agent has an `activity`
  * until it ends.
  */
@@ -3245,12 +3353,13 @@ export interface SetWorkspaceEmojiRequest {
 /**
  * Hands actor `actor_id` a new task, `prompt`, with any images in
  * `attachments`, in the mode, on the model and at the effort given (the
- * actor's defaults when left out), titled by the prompt's first line. Its
- * client must be online.
+ * actor's defaults when left out), titled `title`, or by the prompt's
+ * first line when left out. Its client must be online.
  */
 export interface StartActorTaskRequest {
 	actor_id: number;
 	prompt: string;
+	title?: string | null;
 	mode?: string | null;
 	model?: string | null;
 	effort?: string | null;
@@ -3263,6 +3372,15 @@ export interface StartActorTaskRequest {
  */
 export interface StopActorTaskRequest {
 	task_id: number;
+}
+
+/**
+ * Stops the running turn of agent `agent_id`'s conversation: a script it
+ * runs is interrupted and shows as cancelled, and the turn ends without
+ * another model call. Nothing happens when no turn is running.
+ */
+export interface StopAgentTurnRequest {
+	agent_id: number;
 }
 
 /**
@@ -3295,6 +3413,16 @@ export interface Tag {
 export type TagEntity =
 	| "task"
 	| "article";
+
+/**
+ * Which tags the items a listing covers must carry, and which they must
+ * not: an item is listed when it has every tag in `with` and none in
+ * `without`. Empty lists filter nothing.
+ */
+export interface TagFilter {
+	with: number[];
+	without: number[];
+}
 
 /** The ids of the tags on an item; read from a JSON array. */
 export type TagIds = number[];
@@ -3431,6 +3559,13 @@ export type TaskStatus =
 	| "cancelled";
 
 /**
+ * The tasks a saved view lists: one of the lists every workspace has, or
+ * the open tasks of one of its folders. On the wire, a list's name or the
+ * folder's id.
+ */
+export type TaskViewScope = 'inbox' | 'all' | 'done' | 'cancelled' | number;
+
+/**
  * Removes extension `extension_id`, stopping its sandbox and timers and
  * dropping its permission and hook grants.
  */
@@ -3451,6 +3586,21 @@ export interface UpdateIntelligenceAgentRequest {
 	role?: string | null;
 	/** The new directive; `""` clears it. */
 	directive?: string | null;
+}
+
+/**
+ * Replaces what saved view `view_id` lists, and in what order, keeping its
+ * name and place.
+ */
+export interface UpdateSavedTaskViewRequest {
+	workspace_id: number;
+	view_id: number;
+	scope: TaskViewScope;
+	tags: TagFilter;
+	/** Every priority when empty. */
+	priorities: TaskPriority[];
+	sort: TaskSort;
+	descending: boolean;
 }
 
 /** Every kind a client names, each list in the order clients show it. */
@@ -3585,6 +3735,18 @@ export interface Requests {
 	renameTaskFolder: RenameTaskFolderRequest;
 	/** Reorders a workspace's task folders; replies with them in their new order. */
 	reorderTaskFolders: ReorderTaskFoldersRequest;
+	/** Lists a workspace's saved task views, in their order. */
+	listSavedTaskViews: ListSavedTaskViewsRequest;
+	/** Saves a way of looking at a workspace's tasks under a name. */
+	createSavedTaskView: CreateSavedTaskViewRequest;
+	/** Replaces what saved task view `view_id` lists, and in what order. */
+	updateSavedTaskView: UpdateSavedTaskViewRequest;
+	/** Renames saved task view `view_id` in a workspace. */
+	renameSavedTaskView: RenameSavedTaskViewRequest;
+	/** Reorders a workspace's saved task views; replies with them in their new order. */
+	reorderSavedTaskViews: ReorderSavedTaskViewsRequest;
+	/** Deletes saved task view `view_id` in a workspace. */
+	deleteSavedTaskView: DeleteSavedTaskViewRequest;
 	/** Lists a workspace's tags for tasks or for articles, in their order. */
 	listTags: ListTagsRequest;
 	/** Creates a tag for tasks or for articles in a workspace. */
@@ -3738,8 +3900,13 @@ export interface Requests {
 	setAgentMessageReaction: SetAgentMessageReactionRequest;
 	/** Lists the images attached to a message. */
 	listAgentMessageAttachments: ListAgentMessageAttachmentsRequest;
-	/** Sends a message to an agent, queueing its turn on it. */
+	/**
+	 * Sends a message to an agent: a running turn takes it in, or it
+	 * queues the agent's turn on it.
+	 */
 	sendAgentMessage: SendAgentMessageRequest;
+	/** Stops the running turn of an agent's conversation. */
+	stopAgentTurn: StopAgentTurnRequest;
 	/** Approves or denies a background agent's proposal; returns the updated message. */
 	respondToAgentProposal: RespondToAgentProposalRequest;
 	/** Picks an option of an agent's choice, queueing its turn on the pick. */
@@ -3953,6 +4120,18 @@ export interface Replies {
 	renameTaskFolder: TaskFolder;
 	/** Reorders a workspace's task folders; replies with them in their new order. */
 	reorderTaskFolders: TaskFolder[];
+	/** Lists a workspace's saved task views, in their order. */
+	listSavedTaskViews: SavedTaskView[];
+	/** Saves a way of looking at a workspace's tasks under a name. */
+	createSavedTaskView: SavedTaskView;
+	/** Replaces what saved task view `view_id` lists, and in what order. */
+	updateSavedTaskView: SavedTaskView;
+	/** Renames saved task view `view_id` in a workspace. */
+	renameSavedTaskView: SavedTaskView;
+	/** Reorders a workspace's saved task views; replies with them in their new order. */
+	reorderSavedTaskViews: SavedTaskView[];
+	/** Deletes saved task view `view_id` in a workspace. */
+	deleteSavedTaskView: SavedTaskView;
 	/** Lists a workspace's tags for tasks or for articles, in their order. */
 	listTags: Tag[];
 	/** Creates a tag for tasks or for articles in a workspace. */
@@ -4106,8 +4285,13 @@ export interface Replies {
 	setAgentMessageReaction: AcceptedResponse;
 	/** Lists the images attached to a message. */
 	listAgentMessageAttachments: IntelligenceAgentAttachment[];
-	/** Sends a message to an agent, queueing its turn on it. */
+	/**
+	 * Sends a message to an agent: a running turn takes it in, or it
+	 * queues the agent's turn on it.
+	 */
 	sendAgentMessage: AcceptedResponse;
+	/** Stops the running turn of an agent's conversation. */
+	stopAgentTurn: AcceptedResponse;
 	/** Approves or denies a background agent's proposal; returns the updated message. */
 	respondToAgentProposal: IntelligenceAgentMessage;
 	/** Picks an option of an agent's choice, queueing its turn on the pick. */
