@@ -36,7 +36,7 @@ prompt's first line and a client may name it.
 
 ```ts
 const client = new Client(server, {
-	offers: { intelligence: [], connectors: [], actors: [myActor] },
+	offers: { actors: [myActor] },
 	onCall: async (call) => { /* start, message or stop a task */ return { kind: 'accepted' }; },
 	onConnect: async (session) => { /* report each running task's status */ },
 });

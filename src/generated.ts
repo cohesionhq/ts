@@ -24,11 +24,6 @@ export type AccountHost =
 	/** The account's identifier at the service, unique per extension. */
 	identifier: string;
 }
-	| {
-	kind: "client";
-	/** The client serving the account; it has one per connector. */
-	client_id: number;
-}
 	| { kind: "orphaned" };
 
 /**
@@ -322,6 +317,11 @@ export interface ActorTask {
 	 * until it says.
 	 */
 	context: ContextUsage | null;
+	/**
+	 * The agent following it, whose conversation handed it work and hears
+	 * as it next stops; `null` when none does.
+	 */
+	follower_agent_id: number | null;
 }
 
 /**
@@ -344,7 +344,11 @@ export interface ActorTaskMessage {
 	sent_at: number;
 	/** Who said it and what, stored as JSON. */
 	content: ActorTaskMessageContent;
-	/** Whether the user has answered it; only a request can be. */
+	/**
+	 * Whether the user has answered it; only a request can be. A request
+	 * is answered by its response, or passed over by anything the user
+	 * says after it, which the actor takes as their reply instead.
+	 */
 	answered: boolean;
 	/**
 	 * How many images came with it, the user's or the actor's;
@@ -475,8 +479,7 @@ export type ActorUserContent =
  * request is the whole model: the fields given override the catalog's, and
  * one left out falls back to the catalog's (`model_name` then to the
  * identifier), clearing any override. Adding a model the endpoint already
- * offers replaces it. Refused for a client's endpoint, which offers the
- * models the client offers.
+ * offers replaces it.
  */
 export interface AddEndpointModelRequest {
 	endpoint_id: number;
@@ -497,6 +500,42 @@ export interface AddFeedRequest {
 	/** `"coherence"` when absent. */
 	parser?: ArticleParser;
 }
+
+/**
+ * One agent's question to another, stored twice: as `askedAgent` in the
+ * conversation of the agent that asked, and as `askedByAgent` in the
+ * conversation of the agent that answered, each naming the other in
+ * `agent`.
+ */
+export interface AgentAsk {
+	/**
+	 * The other agent: the one asked in `askedAgent`, the one asking in
+	 * `askedByAgent`.
+	 */
+	agent: AgentPeer;
+	question: string;
+	reply: AgentAskReply;
+}
+
+/**
+ * Where a question to another agent stands, tagged by `status`; both of
+ * its messages always say the same.
+ *
+ * - `"waiting"`: the agent asked is still answering.
+ * - `"answered"`: it answered with `text`.
+ * - `"unanswered"`: no answer came, for `reason`, such as the wait timing
+ *   out.
+ */
+export type AgentAskReply =
+	| { status: "waiting" }
+	| {
+	status: "answered";
+	text: string;
+}
+	| {
+	status: "unanswered";
+	reason: string;
+};
 
 /**
  * A question the agent asks with answers to pick from, lettered `A`, `B`,
@@ -547,18 +586,41 @@ export type AgentCodeOutcome =
 	| { status: "cancelled" };
 
 /**
- * Where a cue wakes its agent, and on what model.
- *
- * - `"low"`, `"medium"`, `"high"`: a background run each time the cue
- *   fires, on that tier's default model.
- * - `"foreground"`: a turn of the agent's conversation, once; the cue is
- *   removed as it fires.
+ * The item a message to an agent forwards, by the kind its `cohesion://`
+ * link names it by: a journal entry is a document.
  */
-export type AgentCueEffort =
-	| "low"
-	| "medium"
-	| "high"
-	| "foreground";
+export type AgentForwardTarget =
+	| {
+	kind: "task";
+	workspace_id: number;
+	id: number;
+}
+	| {
+	kind: "document";
+	workspace_id: number;
+	id: number;
+};
+
+/**
+ * The item a `forward` message forwards, which the agent reads from its
+ * `cohesion://` link with its code tool rather than being sent a copy.
+ */
+export interface AgentForwardedItem {
+	kind: AgentForwardedItemKind;
+	workspace_id: number;
+	id: number;
+	/**
+	 * The task's or document's title when it was forwarded; a journal
+	 * entry's is its day, `YYYY-MM-DD`.
+	 */
+	title: string;
+}
+
+/** What kind of item a `forward` message forwards. */
+export type AgentForwardedItemKind =
+	| "task"
+	| "document"
+	| "journal";
 
 /** What became of a memory, in a `memory` message. */
 export type AgentMemoryChange =
@@ -576,6 +638,10 @@ export type AgentMemoryChange =
  *   `network`.
  * - `"choice"`: a question with answers to pick from.
  * - `"memory"`: a memory the agent remembered or forgot.
+ * - `"forward"`: the user's message forwarding an item, with their note.
+ * - `"askedAgent"`: the agent's question to another agent, and its answer.
+ * - `"askedByAgent"`: another agent's question to the agent, and the answer
+ *   it gave.
  */
 export type AgentMessageContent =
 	| {
@@ -597,7 +663,24 @@ export type AgentMessageContent =
 	kind: "memory";
 	memory: string;
 	change: AgentMemoryChange;
-};
+}
+	| {
+	kind: "forward";
+	/** What the user wrote with the item, or empty. */
+	note: string;
+	item: AgentForwardedItem;
+}
+	| ({ kind: "askedAgent" } & AgentAsk)
+	| ({ kind: "askedByAgent" } & AgentAsk);
+
+/**
+ * An agent named in another's conversation, as it was named when it was
+ * asked or asked.
+ */
+export interface AgentPeer {
+	id: number;
+	name: string;
+}
 
 /**
  * A change a background agent asks the user to approve, stored as a
@@ -930,7 +1013,7 @@ export interface ClearIntelligenceDefaultRequest {
 
 /**
  * A client trusted to talk to cohesiond. Any client may show Cohesion to a
- * person, offer capabilities (models and connectors), or both.
+ * person, offer actors, or both.
  */
 export interface Client {
 	id: number;
@@ -941,6 +1024,21 @@ export interface Client {
 	key: string;
 	/** How the client is listed; it can be renamed. */
 	client_name: string;
+	/**
+	 * When it paired, in Unix seconds; `None` for a client paired before
+	 * this was recorded.
+	 */
+	created_at: number | null;
+	/**
+	 * When it last connected, in Unix seconds; `None` until it does. A
+	 * connected client is not updated while its connection lasts.
+	 */
+	last_seen_at: number | null;
+	/**
+	 * The address it last connected from; `None` for a client on the
+	 * same computer as Cohesion, or one not yet seen.
+	 */
+	last_address: string | null;
 }
 
 /**
@@ -1023,6 +1121,12 @@ export interface ContextUsage {
 	total_tokens: number;
 }
 
+/** Creates a team of agents, with none on it yet. */
+export interface CreateAgentTeamRequest {
+	/** Unique among teams, ignoring case. */
+	title: string;
+}
+
 /** Adds an article folder titled `title`, last in the workspace's order. */
 export interface CreateArticleFolderRequest {
 	workspace_id: number;
@@ -1051,6 +1155,8 @@ export interface CreateIntelligenceAgentRequest {
 	role?: string | null;
 	/** The rules the agent always follows; none when absent. */
 	directive?: string | null;
+	/** The team it starts on; none when absent. */
+	team_id?: number | null;
 }
 
 /**
@@ -1069,6 +1175,11 @@ export type CreateIntelligenceEndpointRequest = {
 	 * the provider's usage page; a custom endpoint has none.
 	 */
 	usage_url?: string | null;
+	/**
+	 * How many minutes the server keeps a prompt cached, at least 1.
+	 * Defaults to the provider's; a custom endpoint's to 5.
+	 */
+	cache_minutes?: number | null;
 } & IntelligenceEndpointPreset;
 
 /**
@@ -1083,6 +1194,8 @@ export interface CreateSavedTaskViewRequest {
 	tags: TagFilter;
 	/** Every priority when empty. */
 	priorities: TaskPriority[];
+	/** Every task, sized or not, when empty or absent. */
+	sizes?: TaskSize[];
 	sort: TaskSort;
 	descending: boolean;
 }
@@ -1110,6 +1223,8 @@ export interface CreateTaskRequest {
 	folder_id?: number | null;
 	/** `"none"` when absent. */
 	priority?: TaskPriority | null;
+	/** None when absent. */
+	size?: TaskSize | null;
 	/** Markdown notes; none when absent. */
 	description?: string | null;
 	/** The start day, as `"YYYY-MM-DD"`; none when absent. */
@@ -1151,6 +1266,14 @@ export interface DayRange {
 	after?: string | null;
 }
 
+/**
+ * Deletes team `team_id`: its agents stay, on no team, and its memories
+ * are forgotten.
+ */
+export interface DeleteAgentTeamRequest {
+	team_id: number;
+}
+
 /** Deletes article folder `folder_id`; the articles in it move to the inbox. */
 export interface DeleteArticleFolderRequest {
 	workspace_id: number;
@@ -1164,8 +1287,7 @@ export interface DeleteClientRequest {
 
 /**
  * Removes connector account `account_id` and every resource imported from
- * it. A client's account is refused: it goes with its client, or is
- * orphaned once the client stops offering its connector.
+ * it.
  */
 export interface DeleteConnectorAccountRequest {
 	account_id: number;
@@ -1190,10 +1312,7 @@ export interface DeleteIntelligenceAgentRequest {
 	agent_id: number;
 }
 
-/**
- * Deletes intelligence endpoint `id`. Refused for a client endpoint, which
- * goes with its client (`DeleteClient`).
- */
+/** Deletes intelligence endpoint `id`. */
 export interface DeleteIntelligenceEndpointRequest {
 	id: number;
 }
@@ -1712,14 +1831,14 @@ export interface GetResourceRequest {
  * agent's conversation and `agent:reaction` calls `onAgentReaction(message)`
  * when the user or the agent reacts to one; `activity:started` calls
  * `onActivityStarted(activity)` when an activity starts,
- * `activity:updated` `onActivityUpdated(activity)` when its progress or
- * status changes and `activity:ended` `onActivityEnded(activity)` when it
+ * `activity:updated` `onActivityUpdated(activity)` when its progress,
+ * status or title changes and `activity:ended` `onActivityEnded(activity)` when it
  * ends; `actor:moved` calls `onActorMoved(task)` when an actor task's
  * status changes; `agent:turn:start` calls
  * `onAgentTurnStart(agent)` when an agent starts answering the user and
  * `agent:turn:end` `onAgentTurnEnd(agent)` when it finishes; `day:start` calls `onDayStart()` at 6:00 and
- * `day:end` calls `onDayEnd()` at 23:00, and `hour:start` calls
- * `onHourStart(hour)` at the top of every hour, in the daemon's local time;
+ * `day:end` calls `onDayEnd()` at 23:00, and `timer` calls
+ * `onTimer(timer)` at the start of every minute, in the daemon's local time;
  * `extension:update` calls `onExtensionUpdate(update)` once for each
  * version a registry offers an installed extension at, across restarts;
  * `notification:send` calls `onNotification(notification)` when a script or
@@ -1733,6 +1852,7 @@ export type HookKind =
 	| "task:rename"
 	| "task:move"
 	| "task:priority"
+	| "task:size"
 	| "task:description"
 	| "task:startdate"
 	| "task:duedate"
@@ -1762,7 +1882,7 @@ export type HookKind =
 	| "actor:moved"
 	| "day:start"
 	| "day:end"
-	| "hour:start"
+	| "timer"
 	| "extension:update"
 	| "notification:send";
 
@@ -1841,13 +1961,13 @@ export interface IntelligenceAgent {
 	foreground_started: number | null;
 	/**
 	 * Whether the agent has posted since the user last read its
-	 * conversation.
+	 * conversation; questions between agents don't count.
 	 */
 	agent_unread: boolean;
 	/**
 	 * When the latest message in the agent's conversation was sent, in Unix
-	 * seconds, not counting code runs, documentation lookups or memory
-	 * changes; `null` before the first.
+	 * seconds, not counting code runs, documentation lookups, memory
+	 * changes or questions between agents; `null` before the first.
 	 */
 	last_message_at: number | null;
 	/** Whether the agent is pinned, ahead of the others. */
@@ -1858,6 +1978,11 @@ export interface IntelligenceAgent {
 	 * Unpinned agents go by their latest message instead.
 	 */
 	sort_order: number;
+	/**
+	 * The team the agent is on; `null` when it's on none. Pinning is
+	 * apart from teams: a pinned agent stays on its team.
+	 */
+	team_id: number | null;
 }
 
 /** An image the user attached to a message to an agent. */
@@ -1882,8 +2007,7 @@ export type IntelligenceAgentColor =
 	| "yellow";
 
 /**
- * A hook an agent watches to wake itself, in the background or, once, in
- * its conversation.
+ * A hook an agent watches to wake itself in the background.
  *
  * An agent can have several, each with its own name.
  */
@@ -1904,11 +2028,10 @@ export interface IntelligenceAgentCue {
 	script: string;
 	/** What the agent told itself to do when it wakes. */
 	instructions: string;
-	/**
-	 * How capable a model each background run gets, or `foreground` for a
-	 * cue that wakes the agent's conversation once.
-	 */
-	effort: AgentCueEffort;
+	/** How capable a model each background run the cue wakes gets. */
+	effort: IntelligenceEffort;
+	/** When the cue was last set, in Unix seconds. */
+	set_at: number;
 }
 
 /** A grant an agent holds; an agent holds each kind at most once. */
@@ -1956,16 +2079,33 @@ export interface IntelligenceAgentMessage {
 	 * fetches them.
 	 */
 	attachment_count: number;
+	/**
+	 * The message of the same conversation this one replies to, which a
+	 * client quotes above it; `null` when it stands alone.
+	 */
+	reply_to: number | null;
+	/**
+	 * The message in one line: what a reply quoting it or a line about a
+	 * reaction to it shows, and how a client shows a kind it has no view
+	 * for. Its text, a forward's note (else the item's title), a choice's
+	 * question, a script's title, a proposal's action, `Learning about
+	 * network`, `Remembered: …`, `Asked Scout: …`, `Scout asked: …`, or an
+	 * error.
+	 */
+	excerpt: string;
 }
 
 /**
  * Who sent an agent message.
  *
  * - `"user"`: the user.
- * - `"agent"`: the agent, in its foreground chat.
+ * - `"agent"`: the agent speaking to the user: in its conversation, or
+ *   from a fork of it that another agent's question woke (the message's
+ *   `run_id` names the fork's run).
  * - `"backgroundAgent"`: the agent while running in the background; only
  *   its notes and proposals land here, the run's transcript stays in its
- *   thread.
+ *   thread. Another agent's question to it stands here too, opening the
+ *   fork it woke.
  */
 export type IntelligenceAgentMessageSender =
 	| "user"
@@ -1988,19 +2128,30 @@ export type IntelligenceAgentPersonality =
 	| "candid"
 	| "playful";
 
-/** One background session an agent's cue started. */
+/**
+ * One background session of an agent's: one its cue started, or a fork of
+ * its conversation that another agent's question woke.
+ */
 export interface IntelligenceAgentRun {
 	id: number;
 	agent_id: number;
 	/** The intelligence thread of the session, once it has one. */
 	thread_id: number | null;
-	/** The hook that fired. */
+	/**
+	 * The hook that fired; `agent:message` for a fork another agent's
+	 * question woke, `actor:moved` for one an actor task it follows woke.
+	 */
 	hook: HookKind;
 	/**
-	 * The name of the cue that started the run; `null` for runs from before
-	 * agents had several cues.
+	 * The name of the cue that started the run; `null` for a fork, and for
+	 * runs from before agents had several cues.
 	 */
 	cue_name: string | null;
+	/**
+	 * The agent whose question woke the run, a fork of the conversation;
+	 * `null` for a cue's run, or once that agent is deleted.
+	 */
+	sender_agent_id: number | null;
 	started_at: number;
 	/** When the run finished; `null` while it is running. */
 	ended_at: number | null;
@@ -2030,6 +2181,16 @@ export type IntelligenceAgentRunOutcome =
 	| "running"
 	| "completed"
 	| "failed";
+
+/**
+ * A team of agents: a named group whose members see each other in their
+ * prompts and share the team's memories.
+ */
+export interface IntelligenceAgentTeam {
+	id: number;
+	/** The team's name, unique ignoring case. */
+	title: string;
+}
 
 /**
  * How much an agent says, from least to most.
@@ -2079,6 +2240,19 @@ export interface IntelligenceDefault {
 	/** The endpoint model the tier uses. Removing that model unsets the tier. */
 	endpoint_model_id: number;
 }
+
+/**
+ * How much model a background run gets; each picks the matching tier's
+ * default model.
+ *
+ * - `"low"`: quick checks and short replies.
+ * - `"medium"`: ordinary work.
+ * - `"high"`: hard, multi-step reasoning.
+ */
+export type IntelligenceEffort =
+	| "low"
+	| "medium"
+	| "high";
 
 /**
  * A known provider to create an endpoint for, or a custom endpoint
@@ -2167,6 +2341,7 @@ export type Invalidation =
 	| { kind: "workspace"; id: number }
 	| { kind: "intelligenceCostEvents" }
 	| { kind: "agent"; id: number }
+	| { kind: "agentTeams" }
 	| { kind: "taskFolders"; id: number }
 	| { kind: "documents"; id: number }
 	| { kind: "taskList"; id: {
@@ -2182,6 +2357,7 @@ export type Invalidation =
 	| { kind: "feedArticles" }
 	| { kind: "intelligence" }
 	| { kind: "clients" }
+	| { kind: "security" }
 	| { kind: "tags"; id: number }
 	| { kind: "savedTaskViews"; id: number }
 	| { kind: "extensionUpdates" }
@@ -2358,6 +2534,12 @@ export interface ListSavedTaskViewsRequest {
 	workspace_id: number;
 }
 
+/** One page of the security activity, newest first. */
+export interface ListSecurityEventsRequest {
+	offset?: number;
+	limit?: number | null;
+}
+
 /** Lists workspace `workspace_id`'s tags for `entity`, in their order. */
 export interface ListTagsRequest {
 	workspace_id: number;
@@ -2379,6 +2561,8 @@ export interface ListTasksRequest {
 	statuses?: TaskStatus[] | null;
 	/** Only tasks with these priorities. */
 	priorities?: TaskPriority[] | null;
+	/** Only tasks with these sizes; a task with no size never matches. */
+	sizes?: TaskSize[] | null;
 	/** Only tasks whose start day matches. */
 	start_date?: DayFilter | null;
 	/** Only tasks whose due day matches. */
@@ -2407,12 +2591,13 @@ export type ListedActorUsage = {
 
 /**
  * A client as the clients list shows it. Presence is said here and only
- * here: a client's endpoint or account is reachable while the client it
- * names is online.
+ * here: a client's actors are reachable while the client is online.
  */
 export type ListedClient = {
 	/** Whether the client has a session open with the daemon now. */
 	online: boolean;
+	/** Whether it is the client that asked for the list. */
+	current: boolean;
 } & Client;
 
 /**
@@ -2443,14 +2628,28 @@ export interface MarkArticlesReadRequest {
 /** A fact an agent keeps across conversations, in its own words. */
 export interface Memory {
 	id: number;
-	/**
-	 * The agent it belongs to; `null` for a global memory, which every
-	 * agent sees.
-	 */
-	agent_id: number | null;
+	/** Who sees it: one agent, one team's agents, or every agent. */
+	scope: MemoryScope;
 	created_at: number;
 	memory: string;
 }
+
+/**
+ * Who a memory is for. The table's check gives every row at most one of
+ * an agent and a team.
+ */
+export type MemoryScope =
+	| { kind: "global" }
+	| {
+	kind: "team";
+	/** The team it belongs to. */
+	team_id: number;
+}
+	| {
+	kind: "agent";
+	/** The agent it belongs to. */
+	agent_id: number;
+};
 
 /**
  * What a resource's metadata may say, as a connector fills it. Dates are
@@ -2534,6 +2733,12 @@ export interface OrganizationUnit {
 	display: string;
 }
 
+/** Whether the client asking may open pairing now. */
+export interface PairingAccess {
+	/** Why it can't, as `BeginPairing` would refuse it; `None` when it can. */
+	refusal: string | null;
+}
+
 /** The setup code a new client pairs with. */
 export interface PairingCode {
 	/**
@@ -2542,6 +2747,16 @@ export interface PairingCode {
 	 */
 	code: string;
 }
+
+/**
+ * Which clients may open pairing.
+ *
+ * - `"anyClient"`: any paired client.
+ * - `"localClients"`: only clients on the same computer as Cohesion.
+ */
+export type PairingOpener =
+	| "anyClient"
+	| "localClients";
 
 /** One limit of the plan an actor runs on, such as its five-hour limit. */
 export interface PlanUsage {
@@ -2605,17 +2820,13 @@ export interface RedactedConnectorAccount {
 	host: AccountHost;
 	/** The connector the account is one of: its name, icon, unit and kinds. */
 	connector: Connector;
-	/**
-	 * What describes the account for people: its name or email, or the
-	 * client's current name for a client's account.
-	 */
+	/** What describes the account for people: its name or email. */
 	description: string;
 	/** When the account was added, in Unix seconds. */
 	created_at: number;
 	/**
 	 * Whether the account's items can be browsed and imported: its
-	 * extension is granted `connector`, or it is a client's account. An
-	 * orphaned account's can't.
+	 * extension is granted `connector`. An orphaned account's can't.
 	 */
 	importable: boolean;
 }
@@ -2630,6 +2841,8 @@ export type RedactedEndpointBackend =
 	base_url: string;
 	/** The page where a person sees what the endpoint has used. */
 	usage_url: string | null;
+	/** How many minutes the server keeps a prompt cached. */
+	cache_minutes: number;
 }
 	| {
 	kind: "account";
@@ -2641,25 +2854,16 @@ export type RedactedEndpointBackend =
 	account_id: number;
 	/** The page where a person sees what the endpoint has used. */
 	usage_url: string | null;
-}
-	| {
-	kind: "client";
-	/** The client serving the endpoint. */
-	client_id: number;
+	/** How many minutes the server keeps a prompt cached. */
+	cache_minutes: number;
 };
 
 /** An intelligence endpoint without its API key, safe to send to clients. */
 export interface RedactedIntelligenceEndpoint {
 	id: number;
-	/**
-	 * What the endpoint is called; for a client's endpoint, the client's
-	 * current name.
-	 */
+	/** What the endpoint is called. */
 	name: string;
-	/**
-	 * What serves the endpoint; a client's is reachable while its client
-	 * is online, as the clients list says.
-	 */
+	/** What serves the endpoint. */
 	backend: RedactedEndpointBackend;
 }
 
@@ -2714,12 +2918,16 @@ export interface RemoveAgentCueRequest {
 	cue_id: number;
 }
 
-/**
- * Removes endpoint model `id`, unsetting any tier that uses it. Refused for
- * a client's endpoint, whose models are the ones the client offers.
- */
+/** Removes endpoint model `id`, unsetting any tier that uses it. */
 export interface RemoveEndpointModelRequest {
 	id: number;
+}
+
+/** Renames team `team_id`. */
+export interface RenameAgentTeamRequest {
+	team_id: number;
+	/** Unique among teams, ignoring case. */
+	title: string;
 }
 
 /** Retitles article folder `folder_id`. */
@@ -3000,7 +3208,7 @@ export interface SavedArticle {
 
 /**
  * A way of looking at a workspace's tasks kept under a name: which tasks it
- * lists, the tags and priorities that narrow them, and the order they
+ * lists, the tags, priorities and sizes that narrow them, and the order they
  * come in.
  */
 export interface SavedTaskView {
@@ -3014,6 +3222,11 @@ export interface SavedTaskView {
 	tags: TagFilter;
 	/** The priorities a listed task has one of; every priority when empty. */
 	priorities: TaskPriority[];
+	/**
+	 * The sizes a listed task has one of; every task, sized or not, when
+	 * empty.
+	 */
+	sizes: TaskSize[];
 	sort: TaskSort;
 	/** Reverses `sort`. */
 	descending: boolean;
@@ -3132,6 +3345,65 @@ export interface SearchWorkspaceRequest {
 	query: string;
 }
 
+/** Something that happened at the daemon's door. */
+export interface SecurityEvent {
+	id: number;
+	/** When it happened, in Unix seconds. */
+	created_at: number;
+	kind: SecurityEventKind;
+	/** The client it was about, if any. */
+	client_id: number | null;
+	/** That client's name at the time. */
+	client_name: string | null;
+	/**
+	 * The address it came from, as the daemon saw it, if it came over the
+	 * network.
+	 */
+	address: string | null;
+}
+
+/**
+ * What a security event records.
+ *
+ * - `"pairingOpened"`: a client opened pairing.
+ * - `"clientPaired"`: a new client paired.
+ * - `"clientRenamed"`: a client was renamed.
+ * - `"clientRevoked"`: a client was revoked.
+ * - `"inactiveClientRevoked"`: a client was revoked for not connecting.
+ * - `"settingsChanged"`: the security settings changed.
+ * - `"pairingRefused"`: a pairing attempt was refused; recorded once an
+ *   hour per address.
+ */
+export type SecurityEventKind =
+	| "pairingOpened"
+	| "clientPaired"
+	| "clientRenamed"
+	| "clientRevoked"
+	| "inactiveClientRevoked"
+	| "settingsChanged"
+	| "pairingRefused";
+
+/** A page of the security activity. */
+export interface SecurityEventPage {
+	/** How many events there are in all, on any page. */
+	total: number;
+	events: SecurityEvent[];
+}
+
+/** The daemon's security settings; there is always exactly one row. */
+export interface SecuritySettings {
+	id: number;
+	/** Which clients may open pairing. */
+	pairing_opened_by: PairingOpener;
+	/** Whether a new client pairing sends a notification. */
+	alert_new_client: boolean;
+	/**
+	 * Revokes a client once it hasn't connected for this many days; never
+	 * when `None`. A connected client is never revoked.
+	 */
+	revoke_inactive_after_days: number | null;
+}
+
 /**
  * Says `content` in actor task `task_id`, with any images in
  * `attachments`: more to do, which starts a task that is done or failed
@@ -3145,7 +3417,8 @@ export interface SendActorTaskMessageRequest {
 
 /**
  * Sends `message` to agent `agent_id` in its foreground chat, with any
- * images in `attachments`. `message` may be empty when there are images.
+ * images in `attachments` and the item `forward` names, which the message
+ * then forwards. `message` may be empty when there are images or an item.
  * The message is saved before the reply, which comes at once. A turn the
  * agent is running takes it in before its next model call; otherwise the
  * agent's turn on it is queued behind any it is answering. What the turn posts
@@ -3156,6 +3429,7 @@ export interface SendAgentMessageRequest {
 	agent_id: number;
 	message: string;
 	attachments?: ImageUpload[] | null;
+	forward?: AgentForwardTarget | null;
 }
 
 /** Why a command failed; `field` names the offending input when there is one. */
@@ -3238,6 +3512,15 @@ export interface SetAgentPinnedRequest {
 }
 
 /**
+ * Puts agent `agent_id` on team `team_id`, or on none when absent. Its pin
+ * is left as it was.
+ */
+export interface SetAgentTeamRequest {
+	agent_id: number;
+	team_id?: number | null;
+}
+
+/**
  * Marks live article `article_id` read or unread. Read is one flag every
  * workspace shares.
  */
@@ -3310,8 +3593,17 @@ export interface SetIntelligenceDefaultRequest {
 }
 
 /**
+ * Sets how many minutes endpoint `id`'s server keeps a prompt cached, at
+ * least 1.
+ */
+export interface SetIntelligenceEndpointCacheMinutesRequest {
+	id: number;
+	cache_minutes: number;
+}
+
+/**
  * Sets where a person sees what endpoint `id` has used, or with no
- * `usage_url` removes it. Refused for a client's endpoint.
+ * `usage_url` removes it.
  */
 export interface SetIntelligenceEndpointUsageUrlRequest {
 	id: number;
@@ -3342,6 +3634,13 @@ export interface SetTaskPriorityRequest {
 	workspace_id: number;
 	task_id: number;
 	priority: TaskPriority;
+}
+
+/** Sets the size of task `task_id` in a workspace; `null` clears it. */
+export interface SetTaskSizeRequest {
+	workspace_id: number;
+	task_id: number;
+	size: TaskSize | null;
 }
 
 /** Sets workspace `id`'s emoji, or clears it when `emoji` is absent. */
@@ -3462,6 +3761,12 @@ export interface Task {
 	/** How urgent the task is. */
 	priority: TaskPriority;
 	/**
+	 * How much time or effort the task takes, from 1 to 5.
+	 *
+	 * `null` when it has none.
+	 */
+	size: TaskSize | null;
+	/**
 	 * The day work on the task can begin, as `"YYYY-MM-DD"`; a calendar day,
 	 * the same wherever it is read.
 	 *
@@ -3526,14 +3831,24 @@ export type TaskPriority =
 	| "urgent";
 
 /**
+ * How much time or effort a task takes, from 1 (the least) to 5 (the
+ * most); a bare number on the wire and in the database.
+ *
+ * Clients name each size with the vocabulary's `task_sizes`, never their
+ * own words, so the names can change without the numbers changing.
+ */
+export type TaskSize = 1 | 2 | 3 | 4 | 5;
+
+/**
  * The order a task listing comes back in.
  *
  * Ties fall back to creation order, and tasks with no value for the key (no
- * start or due day) come last in either direction.
+ * size, start or due day) come last in either direction.
  *
  * - `"created"`: oldest first (the default).
  * - `"title"`: alphabetical, ignoring case.
  * - `"priority"`: `"none"` first, `"urgent"` last.
+ * - `"size"`: smallest first.
  * - `"startDate"`: earliest start day first.
  * - `"dueDate"`: earliest due day first.
  */
@@ -3541,6 +3856,7 @@ export type TaskSort =
 	| "created"
 	| "title"
 	| "priority"
+	| "size"
 	| "startDate"
 	| "dueDate";
 
@@ -3599,8 +3915,18 @@ export interface UpdateSavedTaskViewRequest {
 	tags: TagFilter;
 	/** Every priority when empty. */
 	priorities: TaskPriority[];
+	/** Every task, sized or not, when empty or absent. */
+	sizes?: TaskSize[];
 	sort: TaskSort;
 	descending: boolean;
+}
+
+/** Replaces the security settings. */
+export interface UpdateSecuritySettingsRequest {
+	pairing_opened_by: PairingOpener;
+	alert_new_client: boolean;
+	/** Never when `None`; at least one day. */
+	revoke_inactive_after_days: number | null;
 }
 
 /** Every kind a client names, each list in the order clients show it. */
@@ -3612,6 +3938,8 @@ export interface Vocabulary {
 	hooks: HookWording[];
 	/** Most to least pressing. */
 	task_priorities: ({ kind: TaskPriority; label: string })[];
+	/** Smallest to largest. */
+	task_sizes: ({ kind: TaskSize; label: string })[];
 	activity_statuses: ({ kind: ActivityStatus; label: string })[];
 	/** An actor task's statuses: idle, then its activity's. */
 	actor_task_statuses: ({ kind: ActorTaskStatus; label: string })[];
@@ -3625,6 +3953,10 @@ export interface Vocabulary {
 	dialects: ({ kind: Dialect; label: string })[];
 	/** The emoji an agent message can be reacted with. */
 	agent_reactions: string[];
+	/** Which clients may open pairing. */
+	pairing_openers: ({ kind: PairingOpener; label: string })[];
+	/** What each kind of security activity is called. */
+	security_events: ({ kind: SecurityEventKind; label: string })[];
 }
 
 /** The web UI's static build, for a client to serve. */
@@ -3635,6 +3967,15 @@ export interface WebBundle {
 	 */
 	hash: string;
 	files: WebFile[];
+}
+
+/** The hash of the web UI the daemon was built with. */
+export interface WebBundleHash {
+	/**
+	 * The [`WebBundle`]'s hash, the same value as `Hello`'s
+	 * `web_bundle_hash`; `None` when the daemon was built without the UI.
+	 */
+	hash: string | null;
 }
 
 /** One file of the web UI's build. */
@@ -3691,10 +4032,18 @@ export interface Requests {
 	/** Answers the web UI this cohesiond was built with, for a client to serve. */
 	webBundle: NoArgs;
 	/**
+	 * Answers the hash of the web UI this cohesiond was built with, so a
+	 * client can check its copy without fetching the files.
+	 */
+	webBundleHash: NoArgs;
+	/**
 	 * Opens a pairing window and answers the setup code a new client
 	 * registers with. It works for one registration, for ten minutes.
+	 * Refused to a client the security settings don't let open pairing.
 	 */
 	beginPairing: NoArgs;
+	/** Answers whether the client asking may open pairing now, and why not. */
+	getPairingAccess: NoArgs;
 	/** Evaluates a script on the server. */
 	runScript: RunScriptRequest;
 	/** Lists every workspace that is not deleted. */
@@ -3772,6 +4121,8 @@ export interface Requests {
 	renameTask: RenameTaskRequest;
 	/** Sets the priority of task `task_id` in a workspace. */
 	setTaskPriority: SetTaskPriorityRequest;
+	/** Sets the size of task `task_id` in a workspace; `null` clears it. */
+	setTaskSize: SetTaskSizeRequest;
 	/** Replaces the description of task `task_id` in a workspace; `""` clears it. */
 	editTaskDescription: EditTaskDescriptionRequest;
 	/** Sets both dates of task `task_id` in a workspace; `null` clears one. */
@@ -3789,6 +4140,8 @@ export interface Requests {
 	deleteIntelligenceEndpoint: DeleteIntelligenceEndpointRequest;
 	/** Sets or removes where a person sees what an endpoint has used. */
 	setIntelligenceEndpointUsageUrl: SetIntelligenceEndpointUsageUrlRequest;
+	/** Sets how long an endpoint's server keeps a prompt cached. */
+	setIntelligenceEndpointCacheMinutes: SetIntelligenceEndpointCacheMinutesRequest;
 	/** Imports a model into an endpoint, from the catalog when it lists it. */
 	addEndpointModel: AddEndpointModelRequest;
 	/** Removes an endpoint's model, unsetting any tier that uses it. */
@@ -3860,16 +4213,24 @@ export interface Requests {
 	callExtension: CallExtensionRequest;
 	/**
 	 * Lists every client that is not deleted, each saying whether it is
-	 * connected now.
+	 * connected now and whether it is the one asking.
 	 */
 	listClients: NoArgs;
 	/**
-	 * Revokes client `id`; its certificate is no longer trusted, and an
-	 * client's session no longer serves its offers.
+	 * Revokes client `id`; its certificate is no longer trusted, and its
+	 * session no longer serves its actors.
 	 */
 	deleteClient: DeleteClientRequest;
 	/** Renames client `id`; its name is only how it is listed. */
 	renameClient: RenameClientRequest;
+	/** Revokes every client but the one sending this, and answers them. */
+	revokeOtherClients: NoArgs;
+	/** Answers the security settings. */
+	getSecuritySettings: NoArgs;
+	/** Replaces the security settings. */
+	updateSecuritySettings: UpdateSecuritySettingsRequest;
+	/** Lists a page of the security activity, newest first. */
+	listSecurityEvents: ListSecurityEventsRequest;
 	/** Creates an agent. */
 	createIntelligenceAgent: CreateIntelligenceAgentRequest;
 	/**
@@ -3881,6 +4242,19 @@ export interface Requests {
 	reorderIntelligenceAgents: ReorderIntelligenceAgentsRequest;
 	/** Pins or unpins agent `agent_id`. */
 	setAgentPinned: SetAgentPinnedRequest;
+	/** Puts agent `agent_id` on a team, or on none. */
+	setAgentTeam: SetAgentTeamRequest;
+	/** Lists every team of agents, by title. */
+	listAgentTeams: NoArgs;
+	/** Creates a team of agents. */
+	createAgentTeam: CreateAgentTeamRequest;
+	/** Renames team `team_id`. */
+	renameAgentTeam: RenameAgentTeamRequest;
+	/**
+	 * Deletes team `team_id`; its agents stay, on no team, and its
+	 * memories are forgotten.
+	 */
+	deleteAgentTeam: DeleteAgentTeamRequest;
 	/** Fetches agent `agent_id`. */
 	getIntelligenceAgent: GetIntelligenceAgentRequest;
 	/** Renames, recolors, sets the emoji of or changes the model of agent `agent_id`. */
@@ -4076,10 +4450,18 @@ export interface Replies {
 	/** Answers the web UI this cohesiond was built with, for a client to serve. */
 	webBundle: WebBundle;
 	/**
+	 * Answers the hash of the web UI this cohesiond was built with, so a
+	 * client can check its copy without fetching the files.
+	 */
+	webBundleHash: WebBundleHash;
+	/**
 	 * Opens a pairing window and answers the setup code a new client
 	 * registers with. It works for one registration, for ten minutes.
+	 * Refused to a client the security settings don't let open pairing.
 	 */
 	beginPairing: PairingCode;
+	/** Answers whether the client asking may open pairing now, and why not. */
+	getPairingAccess: PairingAccess;
 	/** Evaluates a script on the server. */
 	runScript: ScriptResult;
 	/** Lists every workspace that is not deleted. */
@@ -4157,6 +4539,8 @@ export interface Replies {
 	renameTask: Task;
 	/** Sets the priority of task `task_id` in a workspace. */
 	setTaskPriority: Task;
+	/** Sets the size of task `task_id` in a workspace; `null` clears it. */
+	setTaskSize: Task;
 	/** Replaces the description of task `task_id` in a workspace; `""` clears it. */
 	editTaskDescription: Task;
 	/** Sets both dates of task `task_id` in a workspace; `null` clears one. */
@@ -4174,6 +4558,8 @@ export interface Replies {
 	deleteIntelligenceEndpoint: RedactedIntelligenceEndpoint;
 	/** Sets or removes where a person sees what an endpoint has used. */
 	setIntelligenceEndpointUsageUrl: RedactedIntelligenceEndpoint;
+	/** Sets how long an endpoint's server keeps a prompt cached. */
+	setIntelligenceEndpointCacheMinutes: RedactedIntelligenceEndpoint;
 	/** Imports a model into an endpoint, from the catalog when it lists it. */
 	addEndpointModel: EndpointModel;
 	/** Removes an endpoint's model, unsetting any tier that uses it. */
@@ -4245,16 +4631,24 @@ export interface Replies {
 	callExtension: ExtensionCallResult;
 	/**
 	 * Lists every client that is not deleted, each saying whether it is
-	 * connected now.
+	 * connected now and whether it is the one asking.
 	 */
 	listClients: ListedClient[];
 	/**
-	 * Revokes client `id`; its certificate is no longer trusted, and an
-	 * client's session no longer serves its offers.
+	 * Revokes client `id`; its certificate is no longer trusted, and its
+	 * session no longer serves its actors.
 	 */
 	deleteClient: Client;
 	/** Renames client `id`; its name is only how it is listed. */
 	renameClient: Client;
+	/** Revokes every client but the one sending this, and answers them. */
+	revokeOtherClients: Client[];
+	/** Answers the security settings. */
+	getSecuritySettings: SecuritySettings;
+	/** Replaces the security settings. */
+	updateSecuritySettings: SecuritySettings;
+	/** Lists a page of the security activity, newest first. */
+	listSecurityEvents: SecurityEventPage;
 	/** Creates an agent. */
 	createIntelligenceAgent: IntelligenceAgent;
 	/**
@@ -4266,6 +4660,19 @@ export interface Replies {
 	reorderIntelligenceAgents: IntelligenceAgent[];
 	/** Pins or unpins agent `agent_id`. */
 	setAgentPinned: IntelligenceAgent;
+	/** Puts agent `agent_id` on a team, or on none. */
+	setAgentTeam: IntelligenceAgent;
+	/** Lists every team of agents, by title. */
+	listAgentTeams: IntelligenceAgentTeam[];
+	/** Creates a team of agents. */
+	createAgentTeam: IntelligenceAgentTeam;
+	/** Renames team `team_id`. */
+	renameAgentTeam: IntelligenceAgentTeam;
+	/**
+	 * Deletes team `team_id`; its agents stay, on no team, and its
+	 * memories are forgotten.
+	 */
+	deleteAgentTeam: IntelligenceAgentTeam;
 	/** Fetches agent `agent_id`. */
 	getIntelligenceAgent: IntelligenceAgent;
 	/** Renames, recolors, sets the emoji of or changes the model of agent `agent_id`. */

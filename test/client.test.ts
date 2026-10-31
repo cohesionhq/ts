@@ -58,7 +58,7 @@ function fakeDaemon() {
 	return { path, heard, state };
 }
 
-const offers = { intelligence: [], connectors: [], actors: [] };
+const offers = { actors: [] };
 const text = (text: string) => ({ kind: 'message', content: { kind: 'text', text } }) as const;
 const updates = (heard: ClientFrame[]) =>
 	heard.filter((frame) => frame.type === 'actorTaskUpdate').map((frame) => ('content' in frame ? frame.content : frame.kind));

@@ -28,16 +28,6 @@ export type ArgsOf<K extends RequestType> = Requests[K] extends NoArgs ? [] : [a
 
 // ---- Offers ----------------------------------------------------------------
 
-/** One model a client runs. */
-export interface CapabilityModel {
-	/** What a completion's `model` names it by. */
-	identifier: string;
-	/** The model as people know it, such as "Private Cloud Compute". */
-	title: string;
-	/** The most tokens a request and its answer may hold together. */
-	context_size: number;
-}
-
 /** An actor as its client offers it in `hello`. */
 export interface ActorDefinition {
 	/** What the daemon names it by in calls; unique among the client's actors. */
@@ -53,13 +43,10 @@ export interface ActorDefinition {
 }
 
 /**
- * Everything a client offers, as its `hello` lists it. Each identifier is
- * unique within its list. Connectors are passed through as the daemon
- * reads them (`ConnectorDefinition`), which nothing generates yet.
+ * Everything a client offers, as its `hello` lists it: its actors, each
+ * identifier unique among them.
  */
 export interface ClientCapabilities {
-	intelligence: CapabilityModel[];
-	connectors: unknown[];
 	actors: ActorDefinition[];
 }
 
@@ -108,19 +95,11 @@ export type ActorCall =
 	| { kind: 'stopActorTask'; actor: string; task_id: number }
 	| { kind: 'setActorTaskMode'; actor: string; task_id: number; mode: string };
 
-/**
- * What the daemon asks a client to do. Model turns and connector calls are
- * passed through untyped, like their offers.
- */
-export type ClientCall =
-	| ActorCall
-	| {
-			kind: 'completion' | 'listOrganizationUnits' | 'listResources' | 'fetchResource';
-			[field: string]: unknown;
-	  };
+/** What the daemon asks a client to do: every call is one of its actors'. */
+export type ClientCall = ActorCall;
 
-/** What a client answers a call with: `accepted` for every actor call. */
-export type ClientResult = { kind: 'accepted' } | { kind: string; [field: string]: unknown };
+/** What a client answers a call with: every call is an actor's, so `accepted`. */
+export type ClientResult = { kind: 'accepted' };
 
 // ---- Actor updates ---------------------------------------------------------
 
@@ -192,7 +171,6 @@ export type ServerFrame = { seq: number } & (
 	| ({ type: 'invalidate' } & InvalidationBatch)
 	| { type: 'reset' }
 	| { type: 'call'; call_id: number; call: ClientCall }
-	| ({ type: 'toolResult'; id: string } & ({ output: string } | { error: string }))
 	| { type: 'evicted'; reason: EvictionReason }
 );
 
