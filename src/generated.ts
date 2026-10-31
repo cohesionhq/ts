@@ -436,6 +436,11 @@ export interface ActorUsage {
 	 * order to show them. Left out, none.
 	 */
 	plan?: PlanUsage[];
+	/**
+	 * The account whose limits these are, when other actors draw on it
+	 * too. Left out, the actor's limits are its own.
+	 */
+	pool?: UsagePool | null;
 }
 
 /**
@@ -949,11 +954,12 @@ export interface BeginConnectorAuthenticationRequest {
 }
 
 /**
- * Calls the global `serviceRequest(name, args)` of the extension whose
- * manifest declares `identifier`, which the extension needs the `service`
- * or `service:isolated` permission enabled for, and answers what it
- * returns. An extension that declares a `service` block answers only the
- * names it declares.
+ * Calls the global `serviceRequest(name, args, caller)` of the extension
+ * whose manifest declares `identifier`, which the extension needs the
+ * `service` or `service:isolated` permission enabled for, and answers what
+ * it returns. `caller` is `{ clientId }`, naming the client asking. An
+ * extension that declares a `service` block answers only the names it
+ * declares.
  */
 export interface CallExtensionRequest {
 	/**
@@ -1843,7 +1849,8 @@ export interface GetResourceRequest {
  * version a registry offers an installed extension at, across restarts;
  * `notification:send` calls `onNotification(notification)` when a script or
  * an agent sends the user a notification, for an extension to push to
- * their devices.
+ * their devices; `client:revoke` calls `onClientRevoke(client)` when a
+ * client is revoked, for an extension to forget what it keeps for it.
  */
 export type HookKind =
 	| "launch"
@@ -1884,7 +1891,8 @@ export type HookKind =
 	| "day:end"
 	| "timer"
 	| "extension:update"
-	| "notification:send";
+	| "notification:send"
+	| "client:revoke";
 
 /** When a hook fires, as clauses that finish "When …". */
 export interface HookWording {
@@ -2584,9 +2592,13 @@ export interface ListWorkspaceResourceKindsRequest {
 	workspace_id: number;
 }
 
-/** How much of its limits actor `actor_id` has used. */
+/**
+ * How much of its limits one pool has used: the latest report among
+ * actors `actor_ids`, which draw on it, least id first. `pool` is left out
+ * for a single actor whose limits are its own.
+ */
 export type ListedActorUsage = {
-	actor_id: number;
+	actor_ids: number[];
 } & ActorUsage;
 
 /**
@@ -3650,6 +3662,17 @@ export interface SetWorkspaceEmojiRequest {
 }
 
 /**
+ * A task size, its name and the color it is drawn in. The colors are a set
+ * of their own, none of them the ones priorities use, so a list can be scanned
+ * for either.
+ */
+export interface SizeWording {
+	kind: TaskSize;
+	label: string;
+	color: IntelligenceAgentColor;
+}
+
+/**
  * Hands actor `actor_id` a new task, `prompt`, with any images in
  * `attachments`, in the mode, on the model and at the effort given (the
  * actor's defaults when left out), titled `title`, or by the prompt's
@@ -3929,6 +3952,22 @@ export interface UpdateSecuritySettingsRequest {
 	revoke_inactive_after_days: number | null;
 }
 
+/**
+ * An account several actors draw on, which one set of plan limits fuels:
+ * the actors reporting the same `id`, from any client, share them, and
+ * the latest report among them stands for all.
+ */
+export interface UsagePool {
+	/**
+	 * Names the account for good, the same from every actor drawing on
+	 * it, prefixed with the product to keep apart other products' ids:
+	 * `claude:jackson@example.com`.
+	 */
+	id: string;
+	/** The account, as people read it: `jackson@example.com`. */
+	name: string;
+}
+
 /** Every kind a client names, each list in the order clients show it. */
 export interface Vocabulary {
 	/** Extension permissions. */
@@ -3939,7 +3978,7 @@ export interface Vocabulary {
 	/** Most to least pressing. */
 	task_priorities: ({ kind: TaskPriority; label: string })[];
 	/** Smallest to largest. */
-	task_sizes: ({ kind: TaskSize; label: string })[];
+	task_sizes: SizeWording[];
 	activity_statuses: ({ kind: ActivityStatus; label: string })[];
 	/** An actor task's statuses: idle, then its activity's. */
 	actor_task_statuses: ({ kind: ActorTaskStatus; label: string })[];
@@ -4207,8 +4246,9 @@ export interface Requests {
 	 */
 	previewExtensionScript: PreviewExtensionScriptRequest;
 	/**
-	 * Calls extension `extension_id`'s `serviceRequest(name, args)`, which
-	 * needs its `service` permission, and answers what it returns.
+	 * Calls extension `extension_id`'s `serviceRequest(name, args, caller)`,
+	 * which needs its `service` permission, telling it which client asks,
+	 * and answers what it returns.
 	 */
 	callExtension: CallExtensionRequest;
 	/**
@@ -4625,8 +4665,9 @@ export interface Replies {
 	 */
 	previewExtensionScript: ExtensionPreview;
 	/**
-	 * Calls extension `extension_id`'s `serviceRequest(name, args)`, which
-	 * needs its `service` permission, and answers what it returns.
+	 * Calls extension `extension_id`'s `serviceRequest(name, args, caller)`,
+	 * which needs its `service` permission, telling it which client asks,
+	 * and answers what it returns.
 	 */
 	callExtension: ExtensionCallResult;
 	/**
