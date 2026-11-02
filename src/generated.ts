@@ -30,7 +30,7 @@ export type AccountHost =
  * A unit of long-running work Cohesion shows the user while it goes on and
  * keeps once it ends: its title, what it is, where it stands and, while it
  * runs, a short line on its progress. The work itself is owned elsewhere
- * (an agent's detached run, an actor's task); only `ActivityTracker` writes these rows.
+ * (an actor's task); only `ActivityTracker` writes these rows.
  */
 export interface Activity {
 	id: number;
@@ -48,16 +48,8 @@ export interface Activity {
 	ended_at: number | null;
 }
 
-/**
- * What an activity is. The table's triggers give every row exactly one of
- * these.
- */
+/** What an activity is. */
 export type ActivityKind =
-	| {
-	kind: "detachedRun";
-	/** The agent whose run it is. */
-	agent_id: number;
-}
 	| {
 	kind: "actorTask";
 	/** The task it shows. */
@@ -318,10 +310,15 @@ export interface ActorTask {
 	 */
 	context: ContextUsage | null;
 	/**
-	 * The agent following it, whose conversation handed it work and hears
-	 * as it next stops; `null` when none does.
+	 * The agent following it, the last to tell it something, which hears
+	 * each time it stops on its own; `null` when none does.
 	 */
 	follower_agent_id: number | null;
+	/**
+	 * Who started the chain of work that told it something, which the
+	 * follower's fork inherits. Only the daemon reads it.
+	 */
+	follower_initiative: Initiative;
 }
 
 /**
@@ -400,6 +397,20 @@ export type ActorTaskStatus =
 	| "needsAttention"
 	| "idle"
 	| "failed";
+
+/**
+ * How an actor task stopped on its own: each wakes the agent following it.
+ *
+ * - `"needsYou"`: the actor waits on the user.
+ * - `"finished"`: the actor finished its turn.
+ * - `"failed"`: the actor couldn't go on.
+ * - `"interrupted"`: the task's device went away mid-turn.
+ */
+export type ActorTaskStop =
+	| "needsYou"
+	| "finished"
+	| "failed"
+	| "interrupted";
 
 /**
  * What kind of tool an actor ran, which its client decides from the
@@ -637,8 +648,8 @@ export type AgentMemoryChange =
  *
  * - `"text"`: plain text.
  * - `"codeExecution"`: a script the agent ran.
- * - `"proposal"`: a change a background agent asks the user to approve.
- * - `"error"`: why the sender's turn or run failed.
+ * - `"error"`: why the sender's turn or run failed, or (from
+ *   `backgroundAgent`, with no `run_id`) why one of its cues' functions did.
  * - `"documentation"`: the script API module the sender loaded, such as
  *   `network`.
  * - `"choice"`: a question with answers to pick from.
@@ -647,6 +658,11 @@ export type AgentMemoryChange =
  * - `"askedAgent"`: the agent's question to another agent, and its answer.
  * - `"askedByAgent"`: another agent's question to the agent, and the answer
  *   it gave.
+ * - `"note"`: what the agent noted for its own later turns, which nobody
+ *   is told of.
+ * - `"woke"`: why the agent woke apart from its conversation: a cue fired,
+ *   or an actor task it follows stopped. What that work posts follows,
+ *   marked with its run.
  */
 export type AgentMessageContent =
 	| {
@@ -654,7 +670,6 @@ export type AgentMessageContent =
 	text: string;
 }
 	| ({ kind: "codeExecution" } & AgentCodeExecution)
-	| ({ kind: "proposal" } & AgentProposal)
 	| {
 	kind: "error";
 	error: string;
@@ -676,7 +691,15 @@ export type AgentMessageContent =
 	item: AgentForwardedItem;
 }
 	| ({ kind: "askedAgent" } & AgentAsk)
-	| ({ kind: "askedByAgent" } & AgentAsk);
+	| ({ kind: "askedByAgent" } & AgentAsk)
+	| {
+	kind: "note";
+	note: string;
+}
+	| {
+	kind: "woke";
+	by: AgentWake;
+};
 
 /**
  * An agent named in another's conversation, as it was named when it was
@@ -688,37 +711,41 @@ export interface AgentPeer {
 }
 
 /**
- * A change a background agent asks the user to approve, stored as a
- * `proposal` message.
+ * Which of an agent's conversation messages its live model thread holds,
+ * by id, in two stretches. The extended context is the summary of recent
+ * messages the thread opens with, one line each; the native context is
+ * the conversation as the thread holds it from then on, each message of
+ * the user's a turn of its own, each script a tool call. Each id is a
+ * bound: a message is on or after it when its id is at least as large.
  */
-export interface AgentProposal {
-	/** What the change does. */
-	action: string;
-	/** Why the agent wants it. */
-	justification: string;
-	/** The script that makes the change once approved. */
-	code: string;
-	status: AgentProposalStatus;
-	/** The script's result, once approved and run. */
-	result: string | null;
-	/** Why the script failed, once approved and run. */
-	error: string | null;
+export interface AgentThreadContext {
+	/**
+	 * Where the extended context starts: the oldest message the opening
+	 * summary holds, or `native_from` when it holds none; earlier messages
+	 * are out of the thread.
+	 */
+	extended_from: number;
+	/**
+	 * Where the native context starts: the first message the thread holds
+	 * as its own turn rather than as a line of the summary, never before
+	 * `extended_from`; it may not be sent yet.
+	 */
+	native_from: number;
 }
 
-/**
- * Where a background agent's proposal stands.
- *
- * - `"pending"`: waiting for the user.
- * - `"approved"`: the user approved it and its code ran.
- * - `"denied"`: the user denied it.
- * - `"withdrawn"`: a later run of the same cue replaced it before the user
- *   answered.
- */
-export type AgentProposalStatus =
-	| "pending"
-	| "approved"
-	| "denied"
-	| "withdrawn";
+/** What woke an agent apart from its conversation, in a `woke` message. */
+export type AgentWake =
+	| {
+	kind: "cue";
+	cue_name: string;
+	hook: HookKind;
+}
+	| {
+	kind: "actorTask";
+	actor_task_id: number;
+	title: string;
+	stop: ActorTaskStop;
+};
 
 /**
  * Appends `content` to the journal for `date` (`"YYYY-MM-DD"`) in a
@@ -1017,6 +1044,11 @@ export interface ClearIntelligenceDefaultRequest {
 	tier: IntelligenceTier;
 }
 
+/** Removes the spend limit of `period`, if it has one. */
+export interface ClearIntelligenceSpendLimitRequest {
+	period: SpendPeriod;
+}
+
 /**
  * A client trusted to talk to cohesiond. Any client may show Cohesion to a
  * person, offer actors, or both.
@@ -1186,6 +1218,11 @@ export type CreateIntelligenceEndpointRequest = {
 	 * Defaults to the provider's; a custom endpoint's to 5.
 	 */
 	cache_minutes?: number | null;
+	/**
+	 * The longer cache an agent's requests ask for. Defaults to the
+	 * provider's; a custom endpoint has none.
+	 */
+	long_cache?: LongCache | null;
 } & IntelligenceEndpointPreset;
 
 /**
@@ -1246,6 +1283,17 @@ export interface CreateWorkspaceRequest {
 	title: string;
 	/** Shown in place of the title's initial; none when absent. */
 	emoji?: string | null;
+}
+
+/** How large the database file is. */
+export interface DatabaseSize {
+	/** The whole file, in bytes. */
+	bytes: number;
+	/**
+	 * What of it is free pages, in bytes: space SQLite reuses before the
+	 * file grows, given back once the cleanup vacuums.
+	 */
+	free_bytes: number;
 }
 
 /**
@@ -1820,7 +1868,10 @@ export interface GetResourceRequest {
  * `onLaunch()`; `task:create` calls `onTaskCreate(task)`, `task:status`
  * `onTaskStatus(task)`, and so on for each `task:*`, `taskfolder:*` and
  * `workspace:*` kind with its entity (`task:tagged` when a tag is put on or
- * taken off a task, `task:delete` with the task as it was deleted);
+ * taken off a task, `task:delete` with the task as it was deleted), except
+ * `task:start` and `task:due`, which call `onTaskStart(task)` and
+ * `onTaskDue(task)` at `day:start` for each incomplete task whose start or
+ * due date is that day;
  * `journal:settled` calls `onJournalSettled(document)` two minutes after a
  * journal's last save, and `document:settled` `onDocumentSettled(document)`
  * the same for any other document;
@@ -1863,6 +1914,8 @@ export type HookKind =
 	| "task:description"
 	| "task:startdate"
 	| "task:duedate"
+	| "task:start"
+	| "task:due"
 	| "task:tagged"
 	| "task:delete"
 	| "taskfolder:create"
@@ -1935,6 +1988,19 @@ export interface ImportableResource {
 }
 
 /**
+ * Who started a chain of an agent's work, which every turn of the chain
+ * inherits and which alone decides what it may change.
+ *
+ * - `"user"`: the user's message or pick, and every question and actor
+ *   follow-up that descends from it: everything the conversation may do.
+ * - `"event"`: one of the agent's cues: it reads, and asks the user before
+ *   changing anything.
+ */
+export type Initiative =
+	| "user"
+	| "event";
+
+/**
  * A persistent assistant that keeps its context over time and can wake
  * itself on a hook.
  */
@@ -1963,10 +2029,16 @@ export interface IntelligenceAgent {
 	activity: string | null;
 	/**
 	 * When the running turn of the agent's conversation started, in Unix
-	 * seconds; the user can stop it. `null` when none is running;
-	 * background and detached runs don't count.
+	 * seconds; the user can stop it. `null` when none is running; forks
+	 * don't count.
 	 */
 	foreground_started: number | null;
+	/**
+	 * Which of the conversation's messages the model thread its next turn
+	 * carries on holds; `null` when there is none, and the next turn
+	 * starts one.
+	 */
+	thread: AgentThreadContext | null;
 	/**
 	 * Whether the agent has posted since the user last read its
 	 * conversation; questions between agents don't count.
@@ -1993,7 +2065,10 @@ export interface IntelligenceAgent {
 	team_id: number | null;
 }
 
-/** An image the user attached to a message to an agent. */
+/**
+ * An image with a message in an agent's conversation: one the user
+ * attached, or one the agent showed with a `text` message.
+ */
 export interface IntelligenceAgentAttachment {
 	id: number;
 	message_id: number;
@@ -2042,24 +2117,6 @@ export interface IntelligenceAgentCue {
 	set_at: number;
 }
 
-/** A grant an agent holds; an agent holds each kind at most once. */
-export interface IntelligenceAgentGrant {
-	id: number;
-	agent_id: number;
-	kind: IntelligenceAgentGrantKind;
-}
-
-/**
- * A right an agent's background runs hold beyond what every run has:
- * reading the user's data, its own `storage`, connectors, services and
- * notifications. `network` mounts the `network` global; `cohesion:write`
- * makes `cohesion` writable, so a run can change the user's data without
- * proposing it. A foreground turn is not limited by grants.
- */
-export type IntelligenceAgentGrantKind =
-	| "network"
-	| "cohesion:write";
-
 /** One entry in an agent's conversation. */
 export interface IntelligenceAgentMessage {
 	id: number;
@@ -2083,8 +2140,8 @@ export interface IntelligenceAgentMessage {
 	/** When `reaction` was last set or cleared. */
 	reacted_at: number | null;
 	/**
-	 * How many images the user attached; `ListAgentMessageAttachments`
-	 * fetches them.
+	 * How many images came with it, the user's or the agent's, shown with
+	 * its text; `ListAgentMessageAttachments` fetches them.
 	 */
 	attachment_count: number;
 	/**
@@ -2096,7 +2153,7 @@ export interface IntelligenceAgentMessage {
 	 * The message in one line: what a reply quoting it or a line about a
 	 * reaction to it shows, and how a client shows a kind it has no view
 	 * for. Its text, a forward's note (else the item's title), a choice's
-	 * question, a script's title, a proposal's action, `Learning about
+	 * question, a script's title, `Learning about
 	 * network`, `Remembered: …`, `Asked Scout: …`, `Scout asked: …`, or an
 	 * error.
 	 */
@@ -2110,10 +2167,9 @@ export interface IntelligenceAgentMessage {
  * - `"agent"`: the agent speaking to the user: in its conversation, or
  *   from a fork of it that another agent's question woke (the message's
  *   `run_id` names the fork's run).
- * - `"backgroundAgent"`: the agent while running in the background; only
- *   its notes and proposals land here, the run's transcript stays in its
- *   thread. Another agent's question to it stands here too, opening the
- *   fork it woke.
+ * - `"backgroundAgent"`: the agent in a run one of its cues woke, before
+ *   cues woke forks; only its notes landed here. Another
+ *   agent's question to it stands here too, opening the fork it woke.
  */
 export type IntelligenceAgentMessageSender =
 	| "user"
@@ -2137,8 +2193,8 @@ export type IntelligenceAgentPersonality =
 	| "playful";
 
 /**
- * One background session of an agent's: one its cue started, or a fork of
- * its conversation that another agent's question woke.
+ * One fork of an agent's conversation: one of its cues, another agent's
+ * question or an actor task it follows woke it.
  */
 export interface IntelligenceAgentRun {
 	id: number;
@@ -2179,7 +2235,7 @@ export interface IntelligenceAgentRun {
 }
 
 /**
- * How a background or detached run ended.
+ * How a fork of an agent's conversation ended.
  *
  * - `"running"`: still going.
  * - `"completed"`: finished normally.
@@ -2297,6 +2353,23 @@ export type IntelligenceProvider =
 	| "togetherAI"
 	| "openRouter";
 
+/**
+ * What every model call cost over one period, against that period's
+ * limit, if it has one.
+ */
+export interface IntelligenceSpend {
+	period: SpendPeriod;
+	/** In US dollars; `None` when the period has no limit. */
+	limit: number | null;
+	/** What the calls in the period cost, in US dollars. */
+	spent: number;
+	/**
+	 * Whether `spent` has reached `limit`, which stops background work
+	 * making model calls.
+	 */
+	reached: boolean;
+}
+
 export interface IntelligenceThread {
 	id: number;
 	created_at: number;
@@ -2366,6 +2439,7 @@ export type Invalidation =
 	| { kind: "intelligence" }
 	| { kind: "clients" }
 	| { kind: "security" }
+	| { kind: "storage" }
 	| { kind: "tags"; id: number }
 	| { kind: "savedTaskViews"; id: number }
 	| { kind: "extensionUpdates" }
@@ -2415,11 +2489,6 @@ export interface ListActorTasksRequest {
 
 /** Lists agent `agent_id`'s cues, oldest first. */
 export interface ListAgentCuesRequest {
-	agent_id: number;
-}
-
-/** Lists the grants agent `agent_id`'s background runs hold. */
-export interface ListAgentGrantsRequest {
 	agent_id: number;
 }
 
@@ -2611,6 +2680,25 @@ export type ListedClient = {
 	/** Whether it is the client that asked for the list. */
 	current: boolean;
 } & Client;
+
+/**
+ * A prompt cache longer than an endpoint's default, which a request asks
+ * for with [`CacheLength::Long`](super::CacheLength::Long). Stored as JSON
+ * text.
+ */
+export interface LongCache {
+	/**
+	 * How many minutes it lasts, which a request asks for as its `ttl`
+	 * (`60` as `1h`, `30` as `30m`). At least 1.
+	 */
+	minutes: number;
+	/**
+	 * What a write to it costs, as a multiple of the model's write rate
+	 * for the short cache, which is the only one the catalog (models.dev)
+	 * publishes. More than 0.
+	 */
+	write_multiple: number;
+}
 
 /**
  * Marks actor task `task_id` read, now; the next stretch of work its actor
@@ -2855,6 +2943,11 @@ export type RedactedEndpointBackend =
 	usage_url: string | null;
 	/** How many minutes the server keeps a prompt cached. */
 	cache_minutes: number;
+	/**
+	 * The longer cache an agent's requests ask for, or none when it
+	 * offers none.
+	 */
+	long_cache: LongCache | null;
 }
 	| {
 	kind: "account";
@@ -2868,6 +2961,11 @@ export type RedactedEndpointBackend =
 	usage_url: string | null;
 	/** How many minutes the server keeps a prompt cached. */
 	cache_minutes: number;
+	/**
+	 * The longer cache an agent's requests ask for, or none when it
+	 * offers none.
+	 */
+	long_cache: LongCache | null;
 };
 
 /** An intelligence endpoint without its API key, safe to send to clients. */
@@ -3181,15 +3279,6 @@ export interface RespondToAgentChoiceRequest {
 	option: number;
 }
 
-/**
- * Approves (running its script) or denies the proposal in message
- * `message_id`.
- */
-export interface RespondToAgentProposalRequest {
-	message_id: number;
-	approve: boolean;
-}
-
 /** Evaluates a script on the server. */
 export interface RunScriptRequest {
 	script: string;
@@ -3494,16 +3583,6 @@ export interface SetActorTaskModeRequest {
 }
 
 /**
- * Grants agent `agent_id`'s background runs `kind`, or revokes it when
- * `granted` is false. Returns the grants the agent then holds.
- */
-export interface SetAgentGrantRequest {
-	agent_id: number;
-	kind: IntelligenceAgentGrantKind;
-	granted: boolean;
-}
-
-/**
  * Reacts to message `message_id`, one the agent sent, with a single emoji
  * (clients offer those in `AGENT_REACTIONS`); a blank or absent `reaction`
  * clears it. A reaction queues the agent's turn on it, which may post
@@ -3614,12 +3693,30 @@ export interface SetIntelligenceEndpointCacheMinutesRequest {
 }
 
 /**
+ * Sets the longer prompt cache endpoint `id`'s server offers, which an
+ * agent's requests ask for, or with no `long_cache` removes it.
+ */
+export interface SetIntelligenceEndpointLongCacheRequest {
+	id: number;
+	long_cache: LongCache | null;
+}
+
+/**
  * Sets where a person sees what endpoint `id` has used, or with no
  * `usage_url` removes it.
  */
 export interface SetIntelligenceEndpointUsageUrlRequest {
 	id: number;
 	usage_url: string | null;
+}
+
+/**
+ * Limits what every model call together may cost over `period` to
+ * `amount` US dollars, more than zero, replacing its limit if it has one.
+ */
+export interface SetIntelligenceSpendLimitRequest {
+	period: SpendPeriod;
+	amount: number;
 }
 
 /** Shows kind `kind_id` in workspace `workspace_id`, or hides it there. */
@@ -3673,6 +3770,20 @@ export interface SizeWording {
 }
 
 /**
+ * How far back a spend limit counts model calls. Each is rolling: it
+ * counts what was spent in the length of time just past, so spending
+ * falls back under a limit as old calls age out, not at a set hour.
+ *
+ * - `"hour"`: the last 60 minutes.
+ * - `"day"`: the last 24 hours.
+ * - `"month"`: the last 30 days.
+ */
+export type SpendPeriod =
+	| "hour"
+	| "day"
+	| "month";
+
+/**
  * Hands actor `actor_id` a new task, `prompt`, with any images in
  * `attachments`, in the mode, on the model and at the effort given (the
  * actor's defaults when left out), titled `title`, or by the prompt's
@@ -3703,6 +3814,34 @@ export interface StopActorTaskRequest {
  */
 export interface StopAgentTurnRequest {
 	agent_id: number;
+}
+
+/**
+ * The daemon's storage settings; there is always exactly one row. The
+ * hourly cleanup applies the retentions, and remembering applies the
+ * memory limit. Every value is at least one.
+ */
+export interface StorageSettings {
+	id: number;
+	/**
+	 * A model thread nothing has been added to for this many days is
+	 * deleted, and a thread message this old loses its contents. An
+	 * agent's chat is never touched.
+	 */
+	thread_retention_days: number;
+	/**
+	 * A finished, read actor task whose status last changed this many days
+	 * ago is deleted.
+	 */
+	actor_task_retention_days: number;
+	/** Security activity older than this many days is deleted. */
+	security_event_retention_days: number;
+	/**
+	 * The most memories each scope keeps: an agent its own, a team its
+	 * own, and every agent's together. Lowering it forgets nothing; past
+	 * it, remembering another in that scope is refused.
+	 */
+	memory_limit: number;
 }
 
 /**
@@ -3952,6 +4091,15 @@ export interface UpdateSecuritySettingsRequest {
 	revoke_inactive_after_days: number | null;
 }
 
+/** Replaces the storage settings. */
+export interface UpdateStorageSettingsRequest {
+	/** Each at least one. */
+	thread_retention_days: number;
+	actor_task_retention_days: number;
+	security_event_retention_days: number;
+	memory_limit: number;
+}
+
 /**
  * An account several actors draw on, which one set of plan limits fuels:
  * the actors reporting the same `id`, from any client, share them, and
@@ -3972,8 +4120,6 @@ export interface UsagePool {
 export interface Vocabulary {
 	/** Extension permissions. */
 	permissions: ({ kind: ExtensionPermissionKind; title: string; description: string })[];
-	/** What an agent's background runs may be granted. */
-	agent_grants: ({ kind: IntelligenceAgentGrantKind; title: string; description: string })[];
 	hooks: HookWording[];
 	/** Most to least pressing. */
 	task_priorities: ({ kind: TaskPriority; label: string })[];
@@ -3982,11 +4128,15 @@ export interface Vocabulary {
 	activity_statuses: ({ kind: ActivityStatus; label: string })[];
 	/** An actor task's statuses: idle, then its activity's. */
 	actor_task_statuses: ({ kind: ActorTaskStatus; label: string })[];
+	/** How an actor task stopped on its own, as a wake line says it. */
+	actor_task_stops: ({ kind: ActorTaskStop; label: string })[];
 	agent_colors: ({ kind: IntelligenceAgentColor; label: string })[];
 	agent_personalities: ({ kind: IntelligenceAgentPersonality; label: string })[];
 	agent_verbosities: ({ kind: IntelligenceAgentVerbosity; label: string })[];
 	/** Model tiers, with what each is used for. */
 	tiers: ({ kind: IntelligenceTier; title: string; description: string })[];
+	/** Spend limit periods, shortest first, with what each counts. */
+	spend_periods: ({ kind: SpendPeriod; title: string; description: string })[];
 	/** Providers with a built-in endpoint preset. */
 	providers: ProviderWording[];
 	dialects: ({ kind: Dialect; label: string })[];
@@ -4181,6 +4331,8 @@ export interface Requests {
 	setIntelligenceEndpointUsageUrl: SetIntelligenceEndpointUsageUrlRequest;
 	/** Sets how long an endpoint's server keeps a prompt cached. */
 	setIntelligenceEndpointCacheMinutes: SetIntelligenceEndpointCacheMinutesRequest;
+	/** Sets or removes the longer prompt cache an endpoint's server offers. */
+	setIntelligenceEndpointLongCache: SetIntelligenceEndpointLongCacheRequest;
 	/** Imports a model into an endpoint, from the catalog when it lists it. */
 	addEndpointModel: AddEndpointModelRequest;
 	/** Removes an endpoint's model, unsetting any tier that uses it. */
@@ -4192,6 +4344,12 @@ export interface Requests {
 	listIntelligenceDefaults: NoArgs;
 	/** Removes the default model of `tier`. */
 	clearIntelligenceDefault: ClearIntelligenceDefaultRequest;
+	/** Lists what model calls cost over each spend period, against its limit. */
+	listIntelligenceSpend: NoArgs;
+	/** Sets the spend limit of a period, answering every period's spend. */
+	setIntelligenceSpendLimit: SetIntelligenceSpendLimitRequest;
+	/** Removes the spend limit of a period, answering every period's spend. */
+	clearIntelligenceSpendLimit: ClearIntelligenceSpendLimitRequest;
 	listCatalogModels: ListCatalogModelsRequest;
 	/** Fetches intelligence thread `thread_id` with its messages. */
 	getIntelligenceThread: GetIntelligenceThreadRequest;
@@ -4271,6 +4429,16 @@ export interface Requests {
 	updateSecuritySettings: UpdateSecuritySettingsRequest;
 	/** Lists a page of the security activity, newest first. */
 	listSecurityEvents: ListSecurityEventsRequest;
+	/**
+	 * Answers the storage settings: how long the daemon keeps model
+	 * threads, actor tasks and security activity, and how many memories
+	 * each scope keeps.
+	 */
+	getStorageSettings: NoArgs;
+	/** Replaces the storage settings. */
+	updateStorageSettings: UpdateStorageSettingsRequest;
+	/** Answers how large the database file is. */
+	getDatabaseSize: NoArgs;
 	/** Creates an agent. */
 	createIntelligenceAgent: CreateIntelligenceAgentRequest;
 	/**
@@ -4321,19 +4489,10 @@ export interface Requests {
 	sendAgentMessage: SendAgentMessageRequest;
 	/** Stops the running turn of an agent's conversation. */
 	stopAgentTurn: StopAgentTurnRequest;
-	/** Approves or denies a background agent's proposal; returns the updated message. */
-	respondToAgentProposal: RespondToAgentProposalRequest;
 	/** Picks an option of an agent's choice, queueing its turn on the pick. */
 	respondToAgentChoice: RespondToAgentChoiceRequest;
 	/** Lists agent `agent_id`'s cues, oldest first. */
 	listAgentCues: ListAgentCuesRequest;
-	/** Lists the grants agent `agent_id`'s background runs hold. */
-	listAgentGrants: ListAgentGrantsRequest;
-	/**
-	 * Grants agent `agent_id`'s background runs `kind`, or revokes it;
-	 * returns the grants the agent then holds.
-	 */
-	setAgentGrant: SetAgentGrantRequest;
 	/** Removes cue `cue_id`; an agent left with no cues goes idle. */
 	removeAgentCue: RemoveAgentCueRequest;
 	/**
@@ -4600,6 +4759,8 @@ export interface Replies {
 	setIntelligenceEndpointUsageUrl: RedactedIntelligenceEndpoint;
 	/** Sets how long an endpoint's server keeps a prompt cached. */
 	setIntelligenceEndpointCacheMinutes: RedactedIntelligenceEndpoint;
+	/** Sets or removes the longer prompt cache an endpoint's server offers. */
+	setIntelligenceEndpointLongCache: RedactedIntelligenceEndpoint;
 	/** Imports a model into an endpoint, from the catalog when it lists it. */
 	addEndpointModel: EndpointModel;
 	/** Removes an endpoint's model, unsetting any tier that uses it. */
@@ -4611,6 +4772,12 @@ export interface Replies {
 	listIntelligenceDefaults: IntelligenceDefault[];
 	/** Removes the default model of `tier`. */
 	clearIntelligenceDefault: AcceptedResponse;
+	/** Lists what model calls cost over each spend period, against its limit. */
+	listIntelligenceSpend: IntelligenceSpend[];
+	/** Sets the spend limit of a period, answering every period's spend. */
+	setIntelligenceSpendLimit: IntelligenceSpend[];
+	/** Removes the spend limit of a period, answering every period's spend. */
+	clearIntelligenceSpendLimit: IntelligenceSpend[];
 	listCatalogModels: CatalogModel[];
 	/** Fetches intelligence thread `thread_id` with its messages. */
 	getIntelligenceThread: IntelligenceThreadDetail;
@@ -4690,6 +4857,16 @@ export interface Replies {
 	updateSecuritySettings: SecuritySettings;
 	/** Lists a page of the security activity, newest first. */
 	listSecurityEvents: SecurityEventPage;
+	/**
+	 * Answers the storage settings: how long the daemon keeps model
+	 * threads, actor tasks and security activity, and how many memories
+	 * each scope keeps.
+	 */
+	getStorageSettings: StorageSettings;
+	/** Replaces the storage settings. */
+	updateStorageSettings: StorageSettings;
+	/** Answers how large the database file is. */
+	getDatabaseSize: DatabaseSize;
 	/** Creates an agent. */
 	createIntelligenceAgent: IntelligenceAgent;
 	/**
@@ -4740,19 +4917,10 @@ export interface Replies {
 	sendAgentMessage: AcceptedResponse;
 	/** Stops the running turn of an agent's conversation. */
 	stopAgentTurn: AcceptedResponse;
-	/** Approves or denies a background agent's proposal; returns the updated message. */
-	respondToAgentProposal: IntelligenceAgentMessage;
 	/** Picks an option of an agent's choice, queueing its turn on the pick. */
 	respondToAgentChoice: AcceptedResponse;
 	/** Lists agent `agent_id`'s cues, oldest first. */
 	listAgentCues: IntelligenceAgentCue[];
-	/** Lists the grants agent `agent_id`'s background runs hold. */
-	listAgentGrants: IntelligenceAgentGrant[];
-	/**
-	 * Grants agent `agent_id`'s background runs `kind`, or revokes it;
-	 * returns the grants the agent then holds.
-	 */
-	setAgentGrant: IntelligenceAgentGrant[];
 	/** Removes cue `cue_id`; an agent left with no cues goes idle. */
 	removeAgentCue: AcceptedResponse;
 	/**
