@@ -1,6 +1,6 @@
 // Generated from cohesion-core by `bun run generate`; do not edit.
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 1;
 
 /** Marks a request that carries no `args` key on the wire. */
 export type NoArgs = undefined;
@@ -1269,7 +1269,6 @@ export type ContextCompactionReason =
 	| "cacheExpired"
 	| "contextLimit"
 	| "modelChanged"
-	| "staleContext"
 	| "noThread"
 	| "turnFailed";
 
