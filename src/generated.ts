@@ -2990,6 +2990,20 @@ export type MemoryScope =
 	agent_id: number;
 };
 
+/** What a diagram is drawn as. */
+export type MermaidFormat =
+	| "svg";
+
+/** Why a diagram wasn't drawn. A client shows the source as code either way. */
+export type MermaidRefusal =
+	| "unsupported"
+	| "syntax"
+	| "semantic"
+	| "tooLarge"
+	| "tooSlow"
+	| "busy"
+	| "failed";
+
 /**
  * What a resource's metadata may say, as a connector fills it. Dates are
  * ISO 8601 in UTC with a `Z` suffix (`"2026-10-24T09:30:00Z"`), so they
@@ -3392,6 +3406,35 @@ export interface RenameWorkspaceRequest {
 	id: number;
 	title: string;
 }
+
+/** Draws a Mermaid diagram. */
+export interface RenderMermaidRequest {
+	/** The diagram's Mermaid source: a fenced block's text, without the fence. */
+	source: string;
+	/**
+	 * The width to lay out for, in points. A new width is a new layout, so a
+	 * client asks once per width it shows rather than as it resizes. Left
+	 * out, the diagram takes the size its content wants.
+	 */
+	width?: number | null;
+	format: MermaidFormat;
+}
+
+/** A diagram as drawn, or why it wasn't. */
+export type RenderedMermaid =
+	| {
+	kind: "svg";
+	svg: string;
+	/** The size it was laid out at, which its `viewBox` scales from. */
+	width: number;
+	height: number;
+}
+	| {
+	kind: "refused";
+	reason: MermaidRefusal;
+	/** Says what's wrong, in the renderer's words for a bad source. */
+	message: string;
+};
 
 /**
  * Puts a workspace's article folders in the order of `folder_ids`, first to
@@ -4834,6 +4877,8 @@ export interface Requests {
 	getPairingAccess: NoArgs;
 	/** Evaluates a script on the server. */
 	runScript: RunScriptRequest;
+	/** Draws a Mermaid diagram, or says why it can't be drawn. */
+	renderMermaid: RenderMermaidRequest;
 	/** Lists every workspace that is not deleted. */
 	listWorkspaces: NoArgs;
 	/** Creates a workspace with `title`. */
@@ -5306,6 +5351,8 @@ export interface Replies {
 	getPairingAccess: PairingAccess;
 	/** Evaluates a script on the server. */
 	runScript: ScriptResult;
+	/** Draws a Mermaid diagram, or says why it can't be drawn. */
+	renderMermaid: RenderedMermaid;
 	/** Lists every workspace that is not deleted. */
 	listWorkspaces: Workspace[];
 	/** Creates a workspace with `title`. */
