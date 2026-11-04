@@ -1,6 +1,6 @@
 // Generated from cohesion-core by `bun run generate`; do not edit.
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 4;
 
 /** Marks a request that carries no `args` key on the wire. */
 export type NoArgs = undefined;
@@ -137,6 +137,9 @@ export type ActorFileChangeKind =
  * What an actor says in a task, tagged by `kind`.
  *
  * - `"text"`: the agent's own words, as Markdown.
+ * - `"thinking"`: its reasoning on the way, as Markdown: a summary or the
+ *   full chain, whichever its client has, and when it ended. Clients
+ *   show it quieter than its words.
  * - `"toolUse"`: a tool it ran, such as editing a file, and when it ended.
  * - `"question"`: questions for the user, each with options (Claude Code's
  *   `AskUserQuestion`, Codex's `request_user_input`).
@@ -153,6 +156,16 @@ export type ActorMessageContent =
 	text: string;
 }
 	| {
+	kind: "thinking";
+	text: string;
+	/**
+	 * When it ended, in Unix seconds, as Cohesion heard of it from an
+	 * `end` update; `null` while it goes on, and for thinking whose
+	 * actor never said.
+	 */
+	ended_at: number | null;
+}
+	| {
 	kind: "toolUse";
 	/** The tool, such as "Edit", as the actor names it. */
 	tool: string;
@@ -164,8 +177,8 @@ export type ActorMessageContent =
 	/** What it did, in a line, such as "src/main.rs". */
 	summary: string;
 	/**
-	 * When it ended, in Unix seconds, as Cohesion heard of it from a
-	 * `toolEnd` update; `null` while it runs, and for one whose actor
+	 * When it ended, in Unix seconds, as Cohesion heard of it from an
+	 * `end` update; `null` while it runs, and for one whose actor
 	 * never said (a tool it was stopped in, or an actor that doesn't
 	 * report ends).
 	 */
@@ -279,8 +292,9 @@ export interface ActorQuestionOption {
 /**
  * One task an actor works on, such as a Claude Code session: a thread in
  * the actor's own system, which it reports to Cohesion as it goes. While
- * it works, or needs the user, an activity shows it. A task never ends for
- * good: a message to one that is done, or failed, starts it again.
+ * it works, or needs the user, an activity shows it. A task stays until the
+ * user, or an agent for them, resolves it, and never ends for good: a
+ * message to one that is done, failed or resolved starts it again.
  */
 export interface ActorTask {
 	id: number;
@@ -313,25 +327,16 @@ export interface ActorTask {
 	 * The agent following it, the last to tell it something, which hears
 	 * each time it stops on its own; `null` when none does.
 	 */
-	follower_agent_id: number | null;
-	/**
-	 * Who started the chain of work that told it something, which the
-	 * follower's fork inherits. Only the daemon reads it.
-	 */
-	follower_initiative: Initiative;
+	follower: ActorTaskFollower | null;
 }
 
 /**
- * An image that came with a message in an actor task: one the user
- * attached, or one the actor showed.
+ * The agent following an actor task, and who started the chain of work that
+ * told the task something, which the follower's fork inherits.
  */
-export interface ActorTaskAttachment {
-	id: number;
-	message_id: number;
-	/** `image/png`, `image/jpeg`, `image/gif` or `image/webp`. */
-	media_type: string;
-	/** The image, base64-encoded. */
-	data: string;
+export interface ActorTaskFollower {
+	agent_id: number;
+	initiative: Initiative;
 }
 
 /** One entry in an actor task's transcript. */
@@ -339,7 +344,10 @@ export interface ActorTaskMessage {
 	id: number;
 	task_id: number;
 	sent_at: number;
-	/** Who said it and what, stored as JSON. */
+	/**
+	 * Who said it and what, stored as `sender`, `kind` and the columns they
+	 * set.
+	 */
 	content: ActorTaskMessageContent;
 	/**
 	 * Whether the user has answered it; only a request can be. A request
@@ -388,6 +396,10 @@ export interface ActorTaskSearchHit {
  * - `"idle"`: done, until the user says more.
  * - `"failed"`: the actor couldn't go on; the user may say more to try
  *   again.
+ * - `"resolved"`: the user, or an agent for them, is done with it; lists
+ *   of tasks leave it out, and it is deleted once it has sat resolved
+ *   for the actor task retention. The user may say more to start it
+ *   again.
  *
  * A working task, or one that needs attention, has an activity open, which
  * ends succeeded as it goes idle and failed as it fails.
@@ -396,7 +408,8 @@ export type ActorTaskStatus =
 	| "working"
 	| "needsAttention"
 	| "idle"
-	| "failed";
+	| "failed"
+	| "resolved";
 
 /**
  * How an actor task stopped on its own: each wakes the agent following it.
@@ -488,6 +501,17 @@ export type ActorUserContent =
 	/** What to change, when not approved. */
 	feedback?: string | null;
 };
+
+/**
+ * Adds an email address or phone number, which may not be empty, to live
+ * contact `contact_id` in workspace `workspace_id`, after its others.
+ */
+export interface AddContactMethodRequest {
+	workspace_id: number;
+	contact_id: number;
+	kind: ContactMethodKind;
+	value: string;
+}
 
 /**
  * Makes endpoint `endpoint_id` offer model `model_identifier`, linked to
@@ -663,6 +687,10 @@ export type AgentMemoryChange =
  * - `"woke"`: why the agent woke apart from its conversation: a cue fired,
  *   or an actor task it follows stopped. What that work posts follows,
  *   marked with its run.
+ * - `"compressedContext"`: the agent's turn started a fresh model thread
+ *   from a summary of the conversation rather than carrying on its last
+ *   one, which loses the provider's cached prompt, and `reason` says why
+ *   (`null` on a line written before reasons were kept).
  */
 export type AgentMessageContent =
 	| {
@@ -699,6 +727,10 @@ export type AgentMessageContent =
 	| {
 	kind: "woke";
 	by: AgentWake;
+}
+	| {
+	kind: "compressedContext";
+	reason?: ContextCompactionReason | null;
 };
 
 /**
@@ -708,29 +740,6 @@ export type AgentMessageContent =
 export interface AgentPeer {
 	id: number;
 	name: string;
-}
-
-/**
- * Which of an agent's conversation messages its live model thread holds,
- * by id, in two stretches. The extended context is the summary of recent
- * messages the thread opens with, one line each; the native context is
- * the conversation as the thread holds it from then on, each message of
- * the user's a turn of its own, each script a tool call. Each id is a
- * bound: a message is on or after it when its id is at least as large.
- */
-export interface AgentThreadContext {
-	/**
-	 * Where the extended context starts: the oldest message the opening
-	 * summary holds, or `native_from` when it holds none; earlier messages
-	 * are out of the thread.
-	 */
-	extended_from: number;
-	/**
-	 * Where the native context starts: the first message the thread holds
-	 * as its own turn rather than as a line of the summary, never before
-	 * `extended_from`; it may not be sent yet.
-	 */
-	native_from: number;
 }
 
 /** What woke an agent apart from its conversation, in a `woke` message. */
@@ -745,6 +754,12 @@ export type AgentWake =
 	actor_task_id: number;
 	title: string;
 	stop: ActorTaskStop;
+}
+	| {
+	kind: "assignedTask";
+	workspace_id: number;
+	task_id: number;
+	title: string;
 };
 
 /**
@@ -905,7 +920,7 @@ export type ArticleParser =
 	| "coherence"
 	| "readability";
 
-/** How an article's page was last fetched; stored as JSON text. */
+/** How an article's page was last fetched. */
 export type ArticleSnapshot =
 	| {
 	state: "captured";
@@ -974,6 +989,37 @@ export interface ArticlesMarkedRead {
 	/** How many articles were unread and now are read. */
 	marked: number;
 }
+
+/**
+ * An image with a message: one the user attached, or one an agent or actor
+ * showed.
+ */
+export interface Attachment {
+	id: number;
+	/** The message it came with. */
+	message: AttachmentMessage;
+	/** `image/png`, `image/jpeg`, `image/gif` or `image/webp`. */
+	media_type: string;
+	/** The image, base64-encoded. */
+	data: string;
+}
+
+/**
+ * The message an attachment came with, by which conversation it is in. Real
+ * foreign keys, so a message's attachments cascade with it.
+ *
+ * - `"actorTask"`: a message in an actor task.
+ * - `"agent"`: a message in an agent's conversation.
+ */
+export type AttachmentMessage =
+	| {
+	kind: "actorTask";
+	actor_task_message_id: number;
+}
+	| {
+	kind: "agent";
+	agent_message_id: number;
+};
 
 /** Asks `oauth` extension `extension_id` where the user signs in. */
 export interface BeginConnectorAuthenticationRequest {
@@ -1151,6 +1197,82 @@ export interface ConnectorService {
 	sign_in_hint: string | null;
 }
 
+/** A person a workspace keeps: their name, the ways to reach them and notes. */
+export interface Contact {
+	/** Unique, stable identifier. */
+	id: number;
+	/** Id of the workspace the contact belongs to. */
+	workspace_id: number;
+	/**
+	 * Whether the contact has been soft-deleted.
+	 *
+	 * Listings skip deleted contacts, so this is normally `false`.
+	 */
+	deleted: boolean;
+	/** Never empty. */
+	first_name: string;
+	/** `null` when the contact has none; never empty. */
+	middle_name: string | null;
+	/** Never empty. */
+	last_name: string;
+	/** Free text about the contact, as plain text / Markdown. */
+	notes: string;
+	/** When the contact was added, in Unix seconds. */
+	created_at: number;
+	/**
+	 * When its names, notes, methods or photo last changed, in Unix
+	 * seconds.
+	 */
+	modified: number;
+	/** Its photo, if it has one. */
+	photo: Photo;
+	/**
+	 * The email addresses and phone numbers that reach the contact, in the
+	 * order they were added.
+	 */
+	methods: ContactMethod[];
+}
+
+/** One way to reach a contact: an email address or a phone number. */
+export interface ContactMethod {
+	/** Unique, stable identifier. */
+	id: number;
+	/** Id of the workspace its contact belongs to. */
+	workspace_id: number;
+	/** Id of the contact it reaches. */
+	contact_id: number;
+	/** Whether `value` is an email address or a phone number. */
+	kind: ContactMethodKind;
+	/** The address or number, as written; never empty. */
+	value: string;
+	/** When the method was added, in Unix seconds. */
+	created_at: number;
+	/** When its kind or value last changed, in Unix seconds. */
+	modified: number;
+}
+
+/**
+ * What a contact method reaches; stored as text.
+ *
+ * - `"email"`: an email address.
+ * - `"phone"`: a phone number.
+ */
+export type ContactMethodKind =
+	| "email"
+	| "phone";
+
+/**
+ * Why an agent's turn started a fresh model thread instead of carrying on
+ * its last one, in a `compressedContext` message.
+ */
+export type ContextCompactionReason =
+	| "cacheExpired"
+	| "contextLimit"
+	| "modelChanged"
+	| "staleContext"
+	| "noThread"
+	| "turnFailed";
+
 /** How full a task's context window is, in tokens. */
 export interface ContextUsage {
 	/** The tokens the context holds now, never fewer than none. */
@@ -1169,6 +1291,20 @@ export interface CreateAgentTeamRequest {
 export interface CreateArticleFolderRequest {
 	workspace_id: number;
 	title: string;
+}
+
+/**
+ * Creates a contact in workspace `workspace_id`, with `methods` in their
+ * order. The first and last names may not be empty, nor may a method's
+ * value; an empty middle name is none.
+ */
+export interface CreateContactRequest {
+	workspace_id: number;
+	first_name: string;
+	middle_name?: string | null;
+	last_name: string;
+	notes: string;
+	methods: NewContactMethod[];
 }
 
 /** Creates an ordinary document in a workspace. */
@@ -1268,6 +1404,8 @@ export interface CreateTaskRequest {
 	priority?: TaskPriority | null;
 	/** None when absent. */
 	size?: TaskSize | null;
+	/** No one when absent. */
+	assignee?: TaskAssignee | null;
 	/** Markdown notes; none when absent. */
 	description?: string | null;
 	/** The start day, as `"YYYY-MM-DD"`; none when absent. */
@@ -1283,6 +1421,14 @@ export interface CreateWorkspaceRequest {
 	title: string;
 	/** Shown in place of the title's initial; none when absent. */
 	emoji?: string | null;
+}
+
+/** A backup the daemon wrote. */
+export interface DatabaseBackup {
+	/** Where it is, on the daemon's computer. */
+	path: string;
+	/** How large it is, in bytes. */
+	bytes: number;
 }
 
 /** How large the database file is. */
@@ -1347,6 +1493,21 @@ export interface DeleteConnectorAccountRequest {
 	account_id: number;
 }
 
+/**
+ * Removes contact method `method_id` from a live contact in workspace
+ * `workspace_id`.
+ */
+export interface DeleteContactMethodRequest {
+	workspace_id: number;
+	method_id: number;
+}
+
+/** Deletes contact `contact_id` in workspace `workspace_id`. */
+export interface DeleteContactRequest {
+	workspace_id: number;
+	contact_id: number;
+}
+
 /** Deletes document `document_id` in a workspace. */
 export interface DeleteDocumentRequest {
 	workspace_id: number;
@@ -1407,6 +1568,23 @@ export interface DeleteTaskRequest {
 /** Deletes workspace `id`. */
 export interface DeleteWorkspaceRequest {
 	id: number;
+}
+
+/**
+ * A deleted item Rewind can still bring back: what its `"deleted"` version
+ * holds.
+ */
+export interface DeletedItem {
+	/** What was deleted. */
+	item: VersionedItem;
+	title: string;
+	/** For a journal entry, the day it belongs to. */
+	journal_date: string | null;
+	/** Who deleted it. */
+	author: VersionAuthor;
+	author_name: string | null;
+	/** When it was deleted, in Unix seconds. */
+	modified: number;
 }
 
 /**
@@ -1770,7 +1948,7 @@ export type FeedFullPagePolicy =
 	| "whenExcerpt"
 	| "always";
 
-/** How a feed was last refreshed; stored as JSON text. */
+/** How a feed was last refreshed. */
 export type FeedStatus =
 	| {
 	state: "refreshed";
@@ -1831,6 +2009,12 @@ export interface GetArticleRequest {
 	article_id: number;
 }
 
+/** Fetches live contact `contact_id` in workspace `workspace_id`. */
+export interface GetContactRequest {
+	workspace_id: number;
+	contact_id: number;
+}
+
 /** Fetches live document `document_id` in a workspace. */
 export interface GetDocumentRequest {
 	workspace_id: number;
@@ -1860,6 +2044,12 @@ export interface GetJournalRequest {
 export interface GetResourceRequest {
 	workspace_id: number;
 	resource_id: number;
+}
+
+/** Fetches one kept version. */
+export interface GetVersionRequest {
+	workspace_id: number;
+	version_id: number;
 }
 
 /**
@@ -1911,6 +2101,7 @@ export type HookKind =
 	| "task:move"
 	| "task:priority"
 	| "task:size"
+	| "task:assigned"
 	| "task:description"
 	| "task:startdate"
 	| "task:duedate"
@@ -1981,8 +2172,11 @@ export interface ImportResourceRequest {
 export interface ImportableResource {
 	identifier: string;
 	title: string;
-	/** When the item last changed, in Unix seconds. */
-	last_updated: number;
+	/**
+	 * When the item last changed, in Unix seconds; absent when the service
+	 * doesn't say.
+	 */
+	last_updated: number | null;
 	/** Whether the item is already a resource in the workspace. */
 	imported: boolean;
 }
@@ -2034,11 +2228,14 @@ export interface IntelligenceAgent {
 	 */
 	foreground_started: number | null;
 	/**
-	 * Which of the conversation's messages the model thread its next turn
-	 * carries on holds; `null` when there is none, and the next turn
-	 * starts one.
+	 * How many tokens the conversation's live model thread held when its
+	 * latest request was sent, as the provider counted them (cached or not):
+	 * the size of the working set the next request builds on. Updated after
+	 * each request of the conversation's turns; forks, jobs and cues don't
+	 * count. `null` while the agent has no live thread, and for a new thread until its first
+	 * request is answered.
 	 */
-	thread: AgentThreadContext | null;
+	context_tokens: number | null;
 	/**
 	 * Whether the agent has posted since the user last read its
 	 * conversation; questions between agents don't count.
@@ -2047,7 +2244,8 @@ export interface IntelligenceAgent {
 	/**
 	 * When the latest message in the agent's conversation was sent, in Unix
 	 * seconds, not counting code runs, documentation lookups, memory
-	 * changes or questions between agents; `null` before the first.
+	 * changes, questions between agents or the agent's bookkeeping (notes,
+	 * wake lines, compressed contexts); `null` before the first.
 	 */
 	last_message_at: number | null;
 	/** Whether the agent is pinned, ahead of the others. */
@@ -2063,19 +2261,6 @@ export interface IntelligenceAgent {
 	 * apart from teams: a pinned agent stays on its team.
 	 */
 	team_id: number | null;
-}
-
-/**
- * An image with a message in an agent's conversation: one the user
- * attached, or one the agent showed with a `text` message.
- */
-export interface IntelligenceAgentAttachment {
-	id: number;
-	message_id: number;
-	/** `image/png`, `image/jpeg`, `image/gif` or `image/webp`. */
-	media_type: string;
-	/** The image, base64-encoded. */
-	data: string;
 }
 
 /** The color an agent is drawn in. */
@@ -2130,7 +2315,7 @@ export interface IntelligenceAgentMessage {
 	run_description: string | null;
 	sent_at: number;
 	sender: IntelligenceAgentMessageSender;
-	/** What it says, stored as JSON. */
+	/** What it says, stored as `kind` and the columns each kind sets. */
 	message_content: AgentMessageContent;
 	/**
 	 * An emoji reacting to the message, from the side that didn't send it:
@@ -2150,14 +2335,34 @@ export interface IntelligenceAgentMessage {
 	 */
 	reply_to: number | null;
 	/**
-	 * The message in one line: what a reply quoting it or a line about a
-	 * reaction to it shows, and how a client shows a kind it has no view
-	 * for. Its text, a forward's note (else the item's title), a choice's
-	 * question, a script's title, `Learning about
-	 * network`, `Remembered: …`, `Asked Scout: …`, `Scout asked: …`, or an
-	 * error.
+	 * The message in one line: what a reply quoting it shows, and how a
+	 * client shows a kind it has no view for. Its text, a forward's note (else the item's title), a choice's
+	 * question, a script's title, `Learning about network`, `Asked Scout:
+	 * …`, `Scout asked: …`, or an error; for the agent's bookkeeping, what
+	 * follows `excerpt_verb`: the memory, the note, or what woke it
+	 * (`Actor task 264 stopped`, `Cue “Morning” fired`, `“Fix
+	 * the build” was assigned to you`). A compressed context's is
+	 * `Context compacted`, then why when it is known, with no verb.
 	 */
 	excerpt: string;
+	/**
+	 * What the agent did, for a line of its bookkeeping: `Remembered`,
+	 * `Forgot`, `Noted` or `Woke`, which reads alone as the heading of a
+	 * run of such lines and before `excerpt` as `Noted: …`; `null` for
+	 * every other kind.
+	 */
+	excerpt_verb: string | null;
+	/**
+	 * What follows `reaction_excerpt_verb` in a line about `reaction`: the
+	 * emoji and the message it reacts to, quoted and cut to 140 characters
+	 * (`👍 to “Done.”`); `null` with no reaction.
+	 */
+	reaction_excerpt: string | null;
+	/**
+	 * `Reacted` when the message has a `reaction`, the heading of a run of
+	 * lines about reactions and the start of one; `null` otherwise.
+	 */
+	reaction_excerpt_verb: string | null;
 }
 
 /**
@@ -2203,7 +2408,8 @@ export interface IntelligenceAgentRun {
 	thread_id: number | null;
 	/**
 	 * The hook that fired; `agent:message` for a fork another agent's
-	 * question woke, `actor:moved` for one an actor task it follows woke.
+	 * question woke, `actor:moved` for one an actor task it follows woke,
+	 * `task:assigned` for one a task assigned to it woke.
 	 */
 	hook: HookKind;
 	/**
@@ -2217,11 +2423,8 @@ export interface IntelligenceAgentRun {
 	 */
 	sender_agent_id: number | null;
 	started_at: number;
-	/** When the run finished; `null` while it is running. */
-	ended_at: number | null;
-	outcome: IntelligenceAgentRunOutcome;
-	/** Why the run failed, when it did. */
-	error: string | null;
+	/** Where it stands, with when it ended and why it failed. */
+	state: IntelligenceAgentRunState;
 	/**
 	 * Prompt tokens across the run that were neither read from nor written
 	 * to the cache.
@@ -2235,16 +2438,23 @@ export interface IntelligenceAgentRun {
 }
 
 /**
- * How a fork of an agent's conversation ended.
+ * Where a fork of an agent's conversation stands, tagged by `status`.
  *
  * - `"running"`: still going.
- * - `"completed"`: finished normally.
- * - `"failed"`: stopped on an error.
+ * - `"completed"`: finished normally, at `ended_at`, in Unix seconds.
+ * - `"failed"`: stopped on `error`, at `ended_at`.
  */
-export type IntelligenceAgentRunOutcome =
-	| "running"
-	| "completed"
-	| "failed";
+export type IntelligenceAgentRunState =
+	| { status: "running" }
+	| {
+	status: "completed";
+	ended_at: number;
+}
+	| {
+	status: "failed";
+	ended_at: number;
+	error: string;
+};
 
 /**
  * A team of agents: a named group whose members see each other in their
@@ -2370,15 +2580,20 @@ export interface IntelligenceSpend {
 	reached: boolean;
 }
 
+/**
+ * The messages sent to a model and what it answered, for an agent's
+ * conversation or a fork of it.
+ */
 export interface IntelligenceThread {
 	id: number;
 	created_at: number;
-	search_eligible: boolean;
-	/** Started by an agent; false only for threads left from Ask, which is gone. */
-	agent_thread: boolean;
+	prompt_id: number;
+	/** The system prompt, from `prompt_id`. */
 	system_prompt: string;
-	remote_id: string | null;
-	remote_cursor: number | null;
+	/** Whether it started empty or carries on another thread's messages. */
+	origin: ThreadOrigin;
+	/** The provider's own copy of the conversation, when it keeps one. */
+	remote: RemoteChain | null;
 }
 
 /** An intelligence thread and its messages, oldest first. */
@@ -2389,21 +2604,17 @@ export interface IntelligenceThreadDetail {
 	cost_events: IntelligenceCostEvent[];
 }
 
+/**
+ * One message of a thread. A fork's own messages come after those it
+ * inherits, and ids order them all.
+ */
 export interface IntelligenceThreadMessage {
 	id: number;
 	thread_id: number;
 	created_at: number;
-	description: string;
-	kind: IntelligenceThreadMessageKind;
-	payload: string;
+	/** What it says. */
+	item: ThreadItem;
 }
-
-export type IntelligenceThreadMessageKind =
-	| "UserMessage"
-	| "AssistantMessage"
-	| "Thinking"
-	| "ToolCallRequest"
-	| "ToolCallResponse";
 
 /**
  * Which default model a session uses.
@@ -2440,7 +2651,9 @@ export type Invalidation =
 	| { kind: "clients" }
 	| { kind: "security" }
 	| { kind: "storage" }
+	| { kind: "profile" }
 	| { kind: "tags"; id: number }
+	| { kind: "contacts"; id: number }
 	| { kind: "savedTaskViews"; id: number }
 	| { kind: "extensionUpdates" }
 	| { kind: "memories" }
@@ -2554,6 +2767,22 @@ export interface ListConnectorOrganizationUnitsRequest {
 	account_id: number;
 }
 
+/**
+ * Lists the live contacts in workspace `workspace_id`, by last name, then
+ * first name, ignoring case.
+ */
+export interface ListContactsRequest {
+	workspace_id: number;
+}
+
+/**
+ * Lists the workspace's deleted items whose deletion Rewind still has, most
+ * recently deleted first.
+ */
+export interface ListDeletedItemsRequest {
+	workspace_id: number;
+}
+
 /** Lists the live documents in a workspace, most recently modified first. */
 export interface ListDocumentsRequest {
 	workspace_id: number;
@@ -2644,6 +2873,8 @@ export interface ListTasksRequest {
 	start_date?: DayFilter | null;
 	/** Only tasks whose due day matches. */
 	due_date?: DayFilter | null;
+	/** Only tasks assigned to this assignee. */
+	assignee?: TaskAssignee | null;
 	/** Only tasks with every tag in `with` and none in `without`. */
 	tags?: TagFilter;
 	/** Creation order when absent. */
@@ -2654,6 +2885,15 @@ export interface ListTasksRequest {
 	offset?: number;
 	/** The most tasks to list: 50 when absent, and never over 500. */
 	limit?: number | null;
+}
+
+/**
+ * Lists an item's kept versions, newest first, without their text. A deleted
+ * item still has its history.
+ */
+export interface ListVersionsRequest {
+	workspace_id: number;
+	item: VersionTarget;
 }
 
 /** Lists the kinds of resource shown in workspace `workspace_id`. */
@@ -2822,6 +3062,14 @@ export interface MoveTaskRequest {
 	folder_id?: number | null;
 }
 
+/** A contact method to add with a new contact. */
+export interface NewContactMethod {
+	/** Whether `value` is an email address or a phone number. */
+	kind: ContactMethodKind;
+	/** The address or number, as written; may not be empty. */
+	value: string;
+}
+
 /**
  * A part of an account that resources are grouped into, such as a team space
  * or a project, as `getOrganizationUnits(credential)` returns them.
@@ -2858,6 +3106,23 @@ export type PairingOpener =
 	| "anyClient"
 	| "localClients";
 
+/**
+ * A photo of someone, a contact or the user, or that there is none;
+ * stored as two nullable columns set together.
+ *
+ * - `"none"`: no photo.
+ * - `"image"`: an image of them.
+ */
+export type Photo =
+	| { kind: "none" }
+	| {
+	kind: "image";
+	/** `image/png`, `image/jpeg`, `image/gif` or `image/webp`. */
+	photo_media_type: string;
+	/** The image, base64-encoded. */
+	photo_data: string;
+};
+
 /** One limit of the plan an actor runs on, such as its five-hour limit. */
 export interface PlanUsage {
 	/** What the limit is, in a few words: "5-hour limit". */
@@ -2882,6 +3147,15 @@ export interface PreviewExtensionRequest {
  */
 export interface PreviewExtensionScriptRequest {
 	script: string;
+}
+
+/** The user's profile; there is always exactly one row. */
+export interface Profile {
+	id: number;
+	/** Their name, `null` until they set one; never empty. */
+	name: string | null;
+	/** Their photo, if they have set one. */
+	photo: Photo;
 }
 
 /** A provider preset, and the catalog provider it reads models from. */
@@ -2922,6 +3196,11 @@ export interface RedactedConnectorAccount {
 	connector: Connector;
 	/** What describes the account for people: its name or email. */
 	description: string;
+	/**
+	 * When refreshing the account's credential last failed, in Unix
+	 * seconds; absent while it works. The account needs signing in again.
+	 */
+	credential_failed_at: number | null;
 	/** When the account was added, in Unix seconds. */
 	created_at: number;
 	/**
@@ -3018,6 +3297,15 @@ export interface RegistrySection {
 	 * returned something other than `RegistryResult[]`.
 	 */
 	error: string | null;
+}
+
+/**
+ * The conversation a provider keeps for a thread, and how many of the
+ * thread's messages it holds.
+ */
+export interface RemoteChain {
+	remote_id: string;
+	remote_cursor: number;
 }
 
 /**
@@ -3172,6 +3460,15 @@ export interface ResnapshotArticleRequest {
 }
 
 /**
+ * Resolves actor task `task_id`: the user is done with it. One going on is
+ * stopped first, telling its actor when its client is online. Lists leave
+ * it out from then on, until the user says more, which starts it again.
+ */
+export interface ResolveActorTaskRequest {
+	task_id: number;
+}
+
+/**
  * A read-only copy of an item imported into a workspace from a connected
  * service. The daemon refreshes it from the service periodically; scripts
  * cannot change it.
@@ -3279,6 +3576,27 @@ export interface RespondToAgentChoiceRequest {
 	option: number;
 }
 
+/**
+ * Puts an item's text back to a kept version's (a task's status too),
+ * bringing the item back if it was deleted, and keeps the result as a new
+ * version. A deleted journal entry is refused while its day has another.
+ */
+export interface RestoreVersionRequest {
+	workspace_id: number;
+	version_id: number;
+}
+
+/** What restoring a version gave back: the item as it now is. */
+export type RestoredItem =
+	| {
+	kind: "task";
+	task: Task;
+}
+	| {
+	kind: "document";
+	document: Document;
+};
+
 /** Evaluates a script on the server. */
 export interface RunScriptRequest {
 	script: string;
@@ -3322,12 +3640,12 @@ export interface SavedTaskView {
 	/** The tags a listed task must have, and those it must not. */
 	tags: TagFilter;
 	/** The priorities a listed task has one of; every priority when empty. */
-	priorities: TaskPriority[];
+	priorities: TaskPriorityList;
 	/**
 	 * The sizes a listed task has one of; every task, sized or not, when
 	 * empty.
 	 */
-	sizes: TaskSize[];
+	sizes: TaskSizeList;
 	sort: TaskSort;
 	/** Reverses `sort`. */
 	descending: boolean;
@@ -3640,6 +3958,17 @@ export interface SetArticleSavedRequest {
 }
 
 /**
+ * Sets live contact `contact_id`'s photo in workspace `workspace_id`,
+ * replacing any it had, or removes it when `photo` is `null`. The photo
+ * passes the same check as an image attached to a message.
+ */
+export interface SetContactPhotoRequest {
+	workspace_id: number;
+	contact_id: number;
+	photo: ImageUpload | null;
+}
+
+/**
  * Enables or disables `hook` for extension `extension_id`. The extension's
  * running sandbox is discarded, and enabling `launch` calls `onLaunch`.
  */
@@ -3719,6 +4048,23 @@ export interface SetIntelligenceSpendLimitRequest {
 	amount: number;
 }
 
+/**
+ * Sets the user's name, without the spaces around it, or removes it when
+ * it is `null` or empty.
+ */
+export interface SetProfileNameRequest {
+	name: string | null;
+}
+
+/**
+ * Sets the user's photo, replacing any they had, or removes it when
+ * `photo` is `null`. The photo passes the same check as an image attached
+ * to a message.
+ */
+export interface SetProfilePhotoRequest {
+	photo: ImageUpload | null;
+}
+
 /** Shows kind `kind_id` in workspace `workspace_id`, or hides it there. */
 export interface SetResourceKindShownRequest {
 	workspace_id: number;
@@ -3736,6 +4082,16 @@ export interface SetTaggedRequest {
 	tag_id: number;
 	entity_id: number;
 	tagged: boolean;
+}
+
+/**
+ * Assigns task `task_id` in a workspace to the user or one of their
+ * agents; `null` leaves it unassigned.
+ */
+export interface SetTaskAssigneeRequest {
+	workspace_id: number;
+	task_id: number;
+	assignee: TaskAssignee | null;
 }
 
 /** Sets the priority of task `task_id` in a workspace. */
@@ -3825,17 +4181,26 @@ export interface StorageSettings {
 	id: number;
 	/**
 	 * A model thread nothing has been added to for this many days is
-	 * deleted, and a thread message this old loses its contents. An
-	 * agent's chat is never touched.
+	 * deleted, and a thread message or a script's result in an agent's chat
+	 * this old loses its contents.
 	 */
 	thread_retention_days: number;
 	/**
-	 * A finished, read actor task whose status last changed this many days
-	 * ago is deleted.
+	 * An actor task resolved this many days ago is deleted, with its images;
+	 * one never resolved stays.
 	 */
 	actor_task_retention_days: number;
-	/** Security activity older than this many days is deleted. */
-	security_event_retention_days: number;
+	/**
+	 * A kept version of a task or document last changed this many days ago
+	 * is deleted, and with the last of them a deleted item's way back.
+	 */
+	rewind_retention_days: number;
+	/**
+	 * A deleted task, document or journal entry is removed for good this many
+	 * days after it was deleted, or once Rewind's retention has passed if that
+	 * is longer.
+	 */
+	deleted_item_retention_days: number;
 	/**
 	 * The most memories each scope keeps: an agent its own, a team its
 	 * own, and every agent's together. Lowering it forgets nothing; past
@@ -3928,6 +4293,8 @@ export interface Task {
 	 * `null` when it has none.
 	 */
 	size: TaskSize | null;
+	/** Who the task is assigned to; `null` when no one is. */
+	assignee: TaskAssignee | null;
 	/**
 	 * The day work on the task can begin, as `"YYYY-MM-DD"`; a calendar day,
 	 * the same wherever it is read.
@@ -3946,6 +4313,27 @@ export interface Task {
 	/** Ids of the tags on the task. */
 	tag_ids: TagIds;
 }
+
+/**
+ * Who a task is assigned to: the user, one of their agents, or one of the
+ * task's workspace's contacts.
+ *
+ * - `"user"`: the user.
+ * - `"agent"`: agent `agent_id`. Deleting the agent leaves the task
+ *   unassigned.
+ * - `"contact"`: contact `contact_id`, of the task's workspace. Deleting the
+ *   contact leaves the task unassigned.
+ */
+export type TaskAssignee =
+	| { kind: "user" }
+	| {
+	kind: "agent";
+	agent_id: number;
+}
+	| {
+	kind: "contact";
+	contact_id: number;
+};
 
 /** A named group of tasks in a workspace. */
 export interface TaskFolder {
@@ -3992,6 +4380,9 @@ export type TaskPriority =
 	| "high"
 	| "urgent";
 
+/** The priorities a saved view lists; read from a JSON array of their numbers. */
+export type TaskPriorityList = TaskPriority[];
+
 /**
  * How much time or effort a task takes, from 1 (the least) to 5 (the
  * most); a bare number on the wire and in the database.
@@ -4000,6 +4391,9 @@ export type TaskPriority =
  * own words, so the names can change without the numbers changing.
  */
 export type TaskSize = 1 | 2 | 3 | 4 | 5;
+
+/** The sizes a saved view lists; read from a JSON array. */
+export type TaskSizeList = TaskSize[];
 
 /**
  * The order a task listing comes back in.
@@ -4044,11 +4438,103 @@ export type TaskStatus =
 export type TaskViewScope = 'inbox' | 'all' | 'done' | 'cancelled' | number;
 
 /**
+ * What a thread message says, tagged by `kind`.
+ *
+ * - `"userMessage"`: what the model was told.
+ * - `"assistantMessage"`: what the model said.
+ * - `"thought"`: the model's reasoning. `signature` is an opaque token some
+ *   providers require back with it; `in_content` says it came inside the
+ *   message content, which is how it goes back.
+ * - `"redactedThought"`: reasoning the provider withheld: an opaque `trace`,
+ *   and a summary if it gave one.
+ * - `"toolCallRequest"`: a tool the model called; `arguments` is what the
+ *   model sent, usually JSON.
+ * - `"toolCallResponse"`: what the call returned, or why it failed.
+ *
+ * An old message is emptied but stays this shape, so a request still pairs
+ * with its response.
+ */
+export type ThreadItem =
+	| {
+	kind: "userMessage";
+	text: string;
+}
+	| {
+	kind: "assistantMessage";
+	text: string;
+}
+	| {
+	kind: "thought";
+	text: string;
+	signature: string | null;
+	in_content: boolean;
+}
+	| {
+	kind: "redactedThought";
+	trace: string;
+	summary: string | null;
+}
+	| {
+	kind: "toolCallRequest";
+	call_identifier: string;
+	tool_name: string;
+	arguments: string;
+}
+	| {
+	kind: "toolCallResponse";
+	call_identifier: string;
+	succeeded: boolean;
+	text: string;
+};
+
+/**
+ * Where a thread's first messages come from.
+ *
+ * - `"root"`: it holds all its own.
+ * - `"fork"`: it carries on another thread: every message of `parent_thread_id`
+ *   through `inherited_through_id` comes before its own, read from the parent
+ *   rather than copied, and there are `inherited_items` of them, counting
+ *   what the parent itself inherited.
+ */
+export type ThreadOrigin =
+	| { kind: "root" }
+	| {
+	kind: "fork";
+	parent_thread_id: number;
+	inherited_through_id: number;
+	inherited_items: number;
+};
+
+/**
  * Removes extension `extension_id`, stopping its sandbox and timers and
  * dropping its permission and hook grants.
  */
 export interface UninstallExtensionRequest {
 	extension_id: number;
+}
+
+/**
+ * Replaces contact method `method_id`'s kind and value, which may not be
+ * empty, on a live contact in workspace `workspace_id`.
+ */
+export interface UpdateContactMethodRequest {
+	workspace_id: number;
+	method_id: number;
+	kind: ContactMethodKind;
+	value: string;
+}
+
+/**
+ * Replaces live contact `contact_id`'s names and notes in workspace
+ * `workspace_id`, by the same rules as creating one.
+ */
+export interface UpdateContactRequest {
+	workspace_id: number;
+	contact_id: number;
+	first_name: string;
+	middle_name?: string | null;
+	last_name: string;
+	notes: string;
 }
 
 /** Changes agent `agent_id`; an absent field is left alone. */
@@ -4096,7 +4582,8 @@ export interface UpdateStorageSettingsRequest {
 	/** Each at least one. */
 	thread_retention_days: number;
 	actor_task_retention_days: number;
-	security_event_retention_days: number;
+	rewind_retention_days: number;
+	deleted_item_retention_days: number;
 	memory_limit: number;
 }
 
@@ -4116,6 +4603,117 @@ export interface UsagePool {
 	name: string;
 }
 
+/** A task's or document's text at one moment. */
+export interface Version {
+	/** Unique, stable identifier. */
+	id: number;
+	/** What it is a version of, and for a task, its status then. */
+	item: VersionedItem;
+	/** Id of the workspace the item belongs to. */
+	workspace_id: number;
+	/** The item's title then. */
+	title: string;
+	/** A task's description, or a document's full text, then. */
+	body: string;
+	/** What this version records. */
+	change: VersionChange;
+	/** Who made it, or last edited it. */
+	author: VersionAuthor;
+	/** The agent's or extension's name at the time, if `author` is either. */
+	author_name: string | null;
+	/** When this version began, in Unix **seconds**. */
+	created: number;
+	/** When it last changed, in Unix **seconds**: its last edit. */
+	modified: number;
+}
+
+/**
+ * Who made a kept version; stored as text.
+ *
+ * - `"user"`: the user, from any client.
+ * - `"agent"`: an agent, named by the version's `author_name`.
+ * - `"extension"`: an extension, named by the version's `author_name`.
+ * - `"script"`: a script run by hand, outside any extension or agent.
+ * - `"unknown"`: nobody on record, for an `"earlier"` version.
+ */
+export type VersionAuthor =
+	| "user"
+	| "agent"
+	| "extension"
+	| "script"
+	| "unknown";
+
+/**
+ * What a kept version records; stored as text.
+ *
+ * - `"created"`: the item as it was made.
+ * - `"edited"`: the item after an edit. Edits within two minutes of a
+ *   version's start share it, whoever makes them.
+ * - `"deleted"`: the item as it was when it was deleted.
+ * - `"restored"`: the item after an older version was restored.
+ * - `"earlier"`: the item before Rewind has a record of who changed it;
+ *   the first change after its older versions have gone keeps it.
+ */
+export type VersionChange =
+	| "created"
+	| "edited"
+	| "deleted"
+	| "restored"
+	| "earlier";
+
+/** A kept version without its text: a row of an item's history. */
+export interface VersionSummary {
+	/** Unique, stable identifier. */
+	id: number;
+	/** What it is a version of, and for a task, its status then. */
+	item: VersionedItem;
+	/** Id of the workspace the item belongs to. */
+	workspace_id: number;
+	/** What this version records. */
+	change: VersionChange;
+	/** Who made it, or last edited it. */
+	author: VersionAuthor;
+	/** The agent's or extension's name at the time, if `author` is either. */
+	author_name: string | null;
+	/** When it last changed, in Unix **seconds**: its last edit. */
+	modified: number;
+	/**
+	 * Whether this is what the item holds now; `false` for every version of
+	 * a deleted item, which restoring any of them brings back.
+	 */
+	current: boolean;
+}
+
+/** Which item a history is asked of. */
+export type VersionTarget =
+	| {
+	kind: "task";
+	task_id: number;
+}
+	| {
+	kind: "document";
+	document_id: number;
+};
+
+/**
+ * What a kept version is of, and what only that kind of item keeps. Real
+ * foreign keys, so an item's versions cascade with it, and the table's checks
+ * hold a version to exactly one.
+ *
+ * - `"task"`: a task, with its status then.
+ * - `"document"`: a document or journal entry.
+ */
+export type VersionedItem =
+	| {
+	kind: "task";
+	task_id: number;
+	status: TaskStatus;
+}
+	| {
+	kind: "document";
+	document_id: number;
+};
+
 /** Every kind a client names, each list in the order clients show it. */
 export interface Vocabulary {
 	/** Extension permissions. */
@@ -4123,6 +4721,8 @@ export interface Vocabulary {
 	hooks: HookWording[];
 	/** Most to least pressing. */
 	task_priorities: ({ kind: TaskPriority; label: string })[];
+	/** What each kind of version Rewind keeps records. */
+	version_changes: ({ kind: VersionChange; label: string })[];
 	/** Smallest to largest. */
 	task_sizes: SizeWording[];
 	activity_statuses: ({ kind: ActivityStatus; label: string })[];
@@ -4265,6 +4865,17 @@ export interface Requests {
 	renameDocument: RenameDocumentRequest;
 	/** Deletes document `document_id` in a workspace. */
 	deleteDocument: DeleteDocumentRequest;
+	/** Lists an item's kept versions, newest first, without their text. */
+	listVersions: ListVersionsRequest;
+	/** Fetches one kept version. */
+	getVersion: GetVersionRequest;
+	/**
+	 * Puts an item back to a kept version, bringing it back if it was
+	 * deleted, and keeps the result as a new version.
+	 */
+	restoreVersion: RestoreVersionRequest;
+	/** Lists the deleted items Rewind can still bring back. */
+	listDeletedItems: ListDeletedItemsRequest;
 	/** Lists task folders */
 	listTaskFolders: ListTaskFoldersRequest;
 	createTaskFolder: CreateTaskFolderRequest;
@@ -4303,6 +4914,24 @@ export interface Requests {
 	 * item as its listing shows it.
 	 */
 	setTagged: SetTaggedRequest;
+	/** Lists a workspace's live contacts, by last name, then first name. */
+	listContacts: ListContactsRequest;
+	/** Fetches live contact `contact_id` in a workspace. */
+	getContact: GetContactRequest;
+	/** Creates a contact in a workspace. */
+	createContact: CreateContactRequest;
+	/** Replaces contact `contact_id`'s names and notes. */
+	updateContact: UpdateContactRequest;
+	/** Deletes contact `contact_id` in a workspace. */
+	deleteContact: DeleteContactRequest;
+	/** Adds an email address or phone number to contact `contact_id`. */
+	addContactMethod: AddContactMethodRequest;
+	/** Replaces contact method `method_id`'s kind and value. */
+	updateContactMethod: UpdateContactMethodRequest;
+	/** Removes contact method `method_id` from its contact. */
+	deleteContactMethod: DeleteContactMethodRequest;
+	/** Sets or removes contact `contact_id`'s photo. */
+	setContactPhoto: SetContactPhotoRequest;
 	/** Lists a page of the live tasks the filters cover. */
 	listTasks: ListTasksRequest;
 	createTask: CreateTaskRequest;
@@ -4312,6 +4941,11 @@ export interface Requests {
 	setTaskPriority: SetTaskPriorityRequest;
 	/** Sets the size of task `task_id` in a workspace; `null` clears it. */
 	setTaskSize: SetTaskSizeRequest;
+	/**
+	 * Assigns task `task_id` in a workspace to the user or one of their
+	 * agents; `null` leaves it unassigned.
+	 */
+	setTaskAssignee: SetTaskAssigneeRequest;
 	/** Replaces the description of task `task_id` in a workspace; `""` clears it. */
 	editTaskDescription: EditTaskDescriptionRequest;
 	/** Sets both dates of task `task_id` in a workspace; `null` clears one. */
@@ -4439,6 +5073,14 @@ export interface Requests {
 	updateStorageSettings: UpdateStorageSettingsRequest;
 	/** Answers how large the database file is. */
 	getDatabaseSize: NoArgs;
+	/** Writes a backup of the database to a new file on the daemon's computer. */
+	backupDatabase: NoArgs;
+	/** Answers the user's profile. */
+	getProfile: NoArgs;
+	/** Sets or removes the user's name. */
+	setProfileName: SetProfileNameRequest;
+	/** Sets or removes the user's photo. */
+	setProfilePhoto: SetProfilePhotoRequest;
 	/** Creates an agent. */
 	createIntelligenceAgent: CreateIntelligenceAgentRequest;
 	/**
@@ -4536,6 +5178,8 @@ export interface Requests {
 	sendActorTaskMessage: SendActorTaskMessageRequest;
 	/** Stops what an actor task is doing, leaving it idle. */
 	stopActorTask: StopActorTaskRequest;
+	/** Resolves an actor task, stopping it first if it is going on. */
+	resolveActorTask: ResolveActorTaskRequest;
 	/** Switches an actor task's mode, through its client. */
 	setActorTaskMode: SetActorTaskModeRequest;
 	/** Lists every service a `connector`-granted extension reaches. */
@@ -4693,6 +5337,17 @@ export interface Replies {
 	renameDocument: Document;
 	/** Deletes document `document_id` in a workspace. */
 	deleteDocument: Document;
+	/** Lists an item's kept versions, newest first, without their text. */
+	listVersions: VersionSummary[];
+	/** Fetches one kept version. */
+	getVersion: Version;
+	/**
+	 * Puts an item back to a kept version, bringing it back if it was
+	 * deleted, and keeps the result as a new version.
+	 */
+	restoreVersion: RestoredItem;
+	/** Lists the deleted items Rewind can still bring back. */
+	listDeletedItems: DeletedItem[];
 	/** Lists task folders */
 	listTaskFolders: TaskFolder[];
 	createTaskFolder: TaskFolder;
@@ -4731,6 +5386,24 @@ export interface Replies {
 	 * item as its listing shows it.
 	 */
 	setTagged: TaggedItem;
+	/** Lists a workspace's live contacts, by last name, then first name. */
+	listContacts: Contact[];
+	/** Fetches live contact `contact_id` in a workspace. */
+	getContact: Contact;
+	/** Creates a contact in a workspace. */
+	createContact: Contact;
+	/** Replaces contact `contact_id`'s names and notes. */
+	updateContact: Contact;
+	/** Deletes contact `contact_id` in a workspace. */
+	deleteContact: Contact;
+	/** Adds an email address or phone number to contact `contact_id`. */
+	addContactMethod: ContactMethod;
+	/** Replaces contact method `method_id`'s kind and value. */
+	updateContactMethod: ContactMethod;
+	/** Removes contact method `method_id` from its contact. */
+	deleteContactMethod: ContactMethod;
+	/** Sets or removes contact `contact_id`'s photo. */
+	setContactPhoto: Contact;
 	/** Lists a page of the live tasks the filters cover. */
 	listTasks: TaskPage;
 	createTask: Task;
@@ -4740,6 +5413,11 @@ export interface Replies {
 	setTaskPriority: Task;
 	/** Sets the size of task `task_id` in a workspace; `null` clears it. */
 	setTaskSize: Task;
+	/**
+	 * Assigns task `task_id` in a workspace to the user or one of their
+	 * agents; `null` leaves it unassigned.
+	 */
+	setTaskAssignee: Task;
 	/** Replaces the description of task `task_id` in a workspace; `""` clears it. */
 	editTaskDescription: Task;
 	/** Sets both dates of task `task_id` in a workspace; `null` clears one. */
@@ -4867,6 +5545,14 @@ export interface Replies {
 	updateStorageSettings: StorageSettings;
 	/** Answers how large the database file is. */
 	getDatabaseSize: DatabaseSize;
+	/** Writes a backup of the database to a new file on the daemon's computer. */
+	backupDatabase: DatabaseBackup;
+	/** Answers the user's profile. */
+	getProfile: Profile;
+	/** Sets or removes the user's name. */
+	setProfileName: Profile;
+	/** Sets or removes the user's photo. */
+	setProfilePhoto: Profile;
 	/** Creates an agent. */
 	createIntelligenceAgent: IntelligenceAgent;
 	/**
@@ -4909,7 +5595,7 @@ export interface Replies {
 	 */
 	setAgentMessageReaction: AcceptedResponse;
 	/** Lists the images attached to a message. */
-	listAgentMessageAttachments: IntelligenceAgentAttachment[];
+	listAgentMessageAttachments: Attachment[];
 	/**
 	 * Sends a message to an agent: a running turn takes it in, or it
 	 * queues the agent's turn on it.
@@ -4957,13 +5643,15 @@ export interface Replies {
 	/** Lists what was said in an actor task, oldest first. */
 	listActorTaskMessages: ActorTaskMessage[];
 	/** Lists the images attached to an actor task message. */
-	listActorTaskMessageAttachments: ActorTaskAttachment[];
+	listActorTaskMessageAttachments: Attachment[];
 	/** Hands an actor a new task, through its client. */
 	startActorTask: ActorTask;
 	/** Says something in an actor task, through its client. */
 	sendActorTaskMessage: ActorTaskMessage;
 	/** Stops what an actor task is doing, leaving it idle. */
 	stopActorTask: ActorTask;
+	/** Resolves an actor task, stopping it first if it is going on. */
+	resolveActorTask: ActorTask;
 	/** Switches an actor task's mode, through its client. */
 	setActorTaskMode: ActorTask;
 	/** Lists every service a `connector`-granted extension reaches. */
