@@ -107,9 +107,9 @@ test('a tool use stored before its session dropped settles with its id, to end i
 	daemon.state.drop = true;
 	const use = await client.report(1, { kind: 'message', content: { kind: 'toolUse', tool: 'Edit', summary: 'a.ts' } });
 	expect(use.id).toBe(2);
-	await client.report(1, { kind: 'toolEnd', message_id: use.id });
+	await client.report(1, { kind: 'end', message_id: use.id });
 	expect(daemon.state.sessions).toBe(2);
-	expect(updates(daemon.heard)).toEqual([{ kind: 'text', text: 'before' }, { kind: 'toolUse', tool: 'Edit', summary: 'a.ts' }, 'toolEnd']);
+	expect(updates(daemon.heard)).toEqual([{ kind: 'text', text: 'before' }, { kind: 'toolUse', tool: 'Edit', summary: 'a.ts' }, 'end']);
 	client.stop();
 });
 
