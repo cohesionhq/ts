@@ -537,8 +537,6 @@ export interface AddFeedRequest {
 	url: string;
 	/** `"whenExcerpt"` when absent. */
 	full_page_policy?: FeedFullPagePolicy;
-	/** `"coherence"` when absent. */
-	parser?: ArticleParser;
 }
 
 /**
@@ -687,9 +685,9 @@ export type AgentMemoryChange =
  * - `"woke"`: why the agent woke apart from its conversation: a cue fired,
  *   or an actor session it follows stopped. What that work posts follows,
  *   marked with its run.
- * - `"compressedContext"`: the agent's turn started a fresh model thread
- *   from a summary of the conversation rather than carrying on its last
- *   one, which loses the provider's cached prompt, and `reason` says why
+ * - `"rebuiltContext"`: the agent's context was built again from the
+ *   database rather than carrying on its last thread, which loses the
+ *   provider's cached prompt, and `reason` says why
  *   (`null` on a line written before reasons were kept).
  */
 export type AgentMessageContent =
@@ -729,8 +727,8 @@ export type AgentMessageContent =
 	by: AgentWake;
 }
 	| {
-	kind: "compressedContext";
-	reason?: ContextCompactionReason | null;
+	kind: "rebuiltContext";
+	reason?: ContextRebuildReason | null;
 };
 
 /**
@@ -741,6 +739,26 @@ export interface AgentPeer {
 	id: number;
 	name: string;
 }
+
+/**
+ * What a message is to the fork that posted it, which says where a client
+ * shows it: a fork's messages are told apart by `run_id`, and may fall among
+ * the conversation's own or another fork's.
+ *
+ * - `"trigger"`: what woke the fork, its `woke` line or another agent's
+ *   question to it. A client collapses the fork's steps under it.
+ * - `"step"`: work the fork did on the way: a script, a module it loaded, a
+ *   memory, a note, a question to another agent. It belongs under the
+ *   trigger, not in the main transcript.
+ * - `"surfaced"`: what the fork has to show the user: a text, a question to
+ *   pick an answer to, or why it failed. It stays in the main transcript.
+ *
+ * An older fork may have no trigger, from before wake lines.
+ */
+export type AgentRunPart =
+	| "trigger"
+	| "step"
+	| "surfaced";
 
 /** What woke an agent apart from its conversation, in a `woke` message. */
 export type AgentWake =
@@ -773,16 +791,9 @@ export interface AppendToJournalRequest {
 }
 
 /**
- * A web page with its content as Markdown as of when it was last fetched:
- * one saved by hand, or an item a feed brought in. An article belongs to no
- * workspace itself: it is saved to any number of workspaces at once (each
- * a [`WorkspaceArticle`], which files it in that workspace's inbox or a
- * folder), and its title, contents and `read` are the same in all of them.
- * Saving a URL to a workspace reuses a live article with that URL rather
- * than adding another.
- *
- * An item from a feed starts in no workspace, in the feed corpus only; an
- * article saved by hand is deleted once it is in no workspace.
+ * A web page a feed brought in, with its content as Markdown as of when it
+ * was last fetched. Articles belong to no workspace: they make up the feed
+ * corpus every workspace shares.
  */
 export interface Article {
 	/** Unique, stable identifier. */
@@ -792,26 +803,23 @@ export interface Article {
 	 * so this is normally `false`.
 	 */
 	deleted: boolean;
-	/** The feed it came from; `None` for an article saved by hand. */
-	feed_id: number | null;
-	/**
-	 * Whether it has been read: one flag, the same from every workspace.
-	 * A new article, saved by hand or from a feed, starts unread.
-	 */
+	/** The feed it came from. */
+	feed_id: number;
+	/** Whether it has been read. A new article starts unread. */
 	read: boolean;
-	/** The address as it was saved. */
+	/** The item's link in the feed. */
 	url: string;
 	/**
-	 * Display name: the page's title when it was first saved, else the
+	 * Display name: the item's title in the feed, else its page's, else the
 	 * last part of the URL's path (its host when the path is empty), until
 	 * renamed.
 	 */
 	title: string;
-	/** Who wrote it, when the page says. */
+	/** Who wrote it, when the feed or page says. */
 	author: string | null;
 	/**
-	 * When it was published, in Unix seconds: the date the page gives,
-	 * else when it was saved.
+	 * When it was published, in Unix seconds: the date the feed or page
+	 * gives, else when it was brought in.
 	 */
 	published_at: number;
 	/** Whether `published_at` is a moment or only a day. */
@@ -821,31 +829,14 @@ export interface Article {
 	/**
 	 * The page's main content as Markdown (a plain-text page as it was
 	 * served) as of the snapshot; `""` when the page has never been
-	 * fetched successfully. Full-text searchable, with the title, through
-	 * the search of every workspace it is saved to.
+	 * fetched successfully. Full-text searchable, with the title and
+	 * author, through the corpus search.
 	 */
 	contents: string;
-	/** When the article was first saved or brought in, in Unix seconds. */
+	/** When the article was brought in, in Unix seconds. */
 	created_at: number;
 	/** When the article last changed, in Unix seconds. */
 	modified: number;
-}
-
-/** A whole article as one workspace's reader shows it. */
-export interface ArticleDetail {
-	article: Article;
-	/**
-	 * Every workspace it is saved to; empty for a feed item no workspace
-	 * has saved. It is saved to the asking workspace when that is one.
-	 */
-	workspace_ids: ArticleWorkspaces;
-	/**
-	 * The folder it is filed in, in the asking workspace; `None` is the
-	 * inbox, or that it isn't saved there.
-	 */
-	article_folder_id: number | null;
-	/** Ids of the asking workspace's tags on it. */
-	tag_ids: TagIds;
 }
 
 /** Why a page couldn't be fetched. */
@@ -866,40 +857,14 @@ export type ArticleFetchFailure =
 	| { kind: "notAFeed" };
 
 /**
- * Which articles a listing covers. The first three are the articles saved
- * to a workspace; the feed ones are shared by every workspace.
+ * Which articles a listing covers.
  *
- * - `"inbox"`: the workspace's saved articles in no folder (the default).
- * - `"all"`: every article saved to the workspace, filed or not.
- * - `{ "folder": id }`: the workspace's saved articles filed in that folder.
- * - `{ "feed": id }`: every article that came from that feed, saved to any
- *   workspaces or to none.
- * - `"feeds"`: every article that came from any feed, saved or not.
- * - `"unreviewed"`: articles from any feed that no workspace has saved.
+ * - `{ "feed": id }`: every article that came from that feed.
+ * - `"feeds"`: every article that came from any feed.
  */
 export type ArticleFilter =
-	| "inbox"
-	| "all"
-	| { "folder": number }
 	| { "feed": number }
-	| "feeds"
-	| "unreviewed";
-
-/**
- * A named group of saved articles in a workspace. A saved article in no
- * folder is in the workspace's article inbox.
- */
-export interface ArticleFolder {
-	id: number;
-	workspace_id: number;
-	title: string;
-	/**
-	 * Where the folder sits among its workspace's article folders; lower
-	 * comes first.
-	 */
-	sort_order: number;
-	deleted: boolean;
-}
+	| "feeds";
 
 /** One page of a listing: its articles, and how many the whole listing has. */
 export interface ArticlePage {
@@ -907,18 +872,6 @@ export interface ArticlePage {
 	/** Every article the listing covers, on any page. */
 	total: number;
 }
-
-/**
- * What finds the article in a fetched page and reads its title, author
- * and date.
- *
- * - `"coherence"`: Cohesion's own parser, still experimental (the
- *   default).
- * - `"readability"`: Readability's algorithm.
- */
-export type ArticleParser =
-	| "coherence"
-	| "readability";
 
 /** How an article's page was last fetched. */
 export type ArticleSnapshot =
@@ -941,33 +894,14 @@ export type ArticleSnapshot =
 	attempted_at: number;
 };
 
-/**
- * An article as a listing in one workspace shows it: everything but its
- * contents, with where it is filed in that workspace. Read only by the
- * article listing, which binds the workspace it lists from (`bind_join`).
- */
+/** An article as a listing shows it: everything but its contents. */
 export interface ArticleSummary {
 	id: number;
 	deleted: boolean;
-	/** The feed it came from, if any. */
-	feed_id: number | null;
-	/** Whether it has been read, from any workspace. */
+	/** The feed it came from. */
+	feed_id: number;
+	/** Whether it has been read. */
 	read: boolean;
-	/**
-	 * Every workspace it is saved to; empty for a feed item no workspace
-	 * has saved. It is saved to the listing's workspace when that is one.
-	 */
-	workspace_ids: ArticleWorkspaces;
-	/**
-	 * The folder it is filed in, in the listing's workspace; `None` is the
-	 * inbox, or that it isn't saved there.
-	 */
-	article_folder_id: number | null;
-	/**
-	 * Ids of the listing workspace's tags on it; empty when it isn't saved
-	 * there.
-	 */
-	tag_ids: TagIds;
 	url: string;
 	title: string;
 	author: string | null;
@@ -980,9 +914,6 @@ export interface ArticleSummary {
 	/** In Unix seconds. */
 	modified: number;
 }
-
-/** The ids of the workspaces an article is saved to; read from a JSON array. */
-export type ArticleWorkspaces = number[];
 
 /** What marking a view read changed. */
 export interface ArticlesMarkedRead {
@@ -1263,11 +1194,12 @@ export type ContactMethodKind =
 
 /**
  * Why an agent's turn started a fresh model thread instead of carrying on
- * its last one, in a `compressedContext` message.
+ * its last one, in a `rebuiltContext` message.
  */
-export type ContextCompactionReason =
+export type ContextRebuildReason =
 	| "cacheExpired"
 	| "contextLimit"
+	| "memoryCapacityChanged"
 	| "modelChanged"
 	| "noThread"
 	| "turnFailed";
@@ -1283,12 +1215,6 @@ export interface ContextUsage {
 /** Creates a team of agents, with none on it yet. */
 export interface CreateAgentTeamRequest {
 	/** Unique among teams, ignoring case. */
-	title: string;
-}
-
-/** Adds an article folder titled `title`, last in the workspace's order. */
-export interface CreateArticleFolderRequest {
-	workspace_id: number;
 	title: string;
 }
 
@@ -1379,12 +1305,11 @@ export interface CreateSavedTaskViewRequest {
 }
 
 /**
- * Creates a tag for `entity` in workspace `workspace_id`. A workspace has
- * one tag of a kind per name, ignoring case.
+ * Creates a tag in workspace `workspace_id`. A workspace has one tag per
+ * name, ignoring case.
  */
 export interface CreateTagRequest {
 	workspace_id: number;
-	entity: TagEntity;
 	name: string;
 }
 
@@ -1473,12 +1398,6 @@ export interface DeleteAgentTeamRequest {
 	team_id: number;
 }
 
-/** Deletes article folder `folder_id`; the articles in it move to the inbox. */
-export interface DeleteArticleFolderRequest {
-	workspace_id: number;
-	folder_id: number;
-}
-
 /** Revokes client `id`; its certificate is no longer trusted. */
 export interface DeleteClientRequest {
 	id: number;
@@ -1513,10 +1432,7 @@ export interface DeleteDocumentRequest {
 	document_id: number;
 }
 
-/**
- * Stops following feed `feed_id` and removes the items from it that no
- * workspace has saved; saved ones stay.
- */
+/** Stops following feed `feed_id` and removes its items. */
 export interface DeleteFeedRequest {
 	feed_id: number;
 }
@@ -1545,7 +1461,7 @@ export interface DeleteSavedTaskViewRequest {
 
 /**
  * Deletes tag `tag_id` of workspace `workspace_id`, taking it off every
- * task or article it was on.
+ * task it was on.
  */
 export interface DeleteTagRequest {
 	workspace_id: number;
@@ -1872,9 +1788,8 @@ export interface ExtensionUpdate {
 
 /**
  * An RSS or Atom feed, followed once for every workspace. Each refresh
- * adds the items it hasn't seen as articles in no workspace, which make up
- * the feed corpus until one is saved to a workspace; nothing a refresh no
- * longer sees is removed.
+ * adds the items it hasn't seen as articles, which make up the feed corpus;
+ * nothing a refresh no longer sees is removed.
  */
 export interface Feed {
 	/** Unique, stable identifier. */
@@ -1892,8 +1807,6 @@ export interface Feed {
 	sort_order: number;
 	/** When an item's page is fetched rather than read from the feed. */
 	full_page_policy: FeedFullPagePolicy;
-	/** What reads an item's page, when it is fetched. */
-	parser: ArticleParser;
 	/** How the last refresh went. */
 	status: FeedStatus;
 	/** When the feed was added, in Unix seconds. */
@@ -1902,7 +1815,7 @@ export interface Feed {
 
 /** What cleaning up feeds removed. */
 export interface FeedCleanup {
-	/** How many unsaved items were removed. */
+	/** How many items were removed. */
 	removed: number;
 }
 
@@ -1912,10 +1825,8 @@ export interface FeedCleanup {
  */
 export interface FeedCorpusHit {
 	id: number;
-	feed_id: number | null;
+	feed_id: number;
 	read: boolean;
-	/** Every workspace it is saved to; empty when none has saved it. */
-	workspace_ids: ArticleWorkspaces;
 	url: string;
 	title: string;
 	author: string | null;
@@ -1972,14 +1883,10 @@ export interface FeedSummary {
 	title: string;
 	sort_order: number;
 	full_page_policy: FeedFullPagePolicy;
-	parser: ArticleParser;
 	status: FeedStatus;
 	/** In Unix seconds. */
 	created_at: number;
-	/**
-	 * How many of its live items haven't been read, saved to a workspace
-	 * or not.
-	 */
+	/** How many of its live items haven't been read. */
 	unread: number;
 }
 
@@ -1998,13 +1905,8 @@ export interface GetAgentMessageRequest {
 	message_id: number;
 }
 
-/**
- * Fetches live article `article_id` as workspace `workspace_id` sees it:
- * whole, with where it is saved and its folder there. Fetching it doesn't
- * mark it read.
- */
+/** Fetches live article `article_id`, whole. Fetching it doesn't mark it read. */
 export interface GetArticleRequest {
-	workspace_id: number;
 	article_id: number;
 }
 
@@ -2069,10 +1971,8 @@ export interface GetVersionRequest {
  * and `resource:delete` `onResourceDelete(resource)` with one as it was removed;
  * `feed:article` calls `onFeedArticle(article)` for each new article a feed
  * refresh brings in, `feed:delete` `onFeedDelete(feed)` with a feed as it was
- * unfollowed, `article:save` `onArticleSave(article)` when an article is saved
- * to a workspace, `article:read` `onArticleRead(article)` when one goes from
- * unread to read and `article:tagged` `onArticleTagged(article)` when a tag is
- * put on or taken off one;
+ * unfollowed and `article:read` `onArticleRead(article)` when one goes from
+ * unread to read;
  * `agent:message` calls `onAgentMessage(message)` when a message lands in an
  * agent's conversation and `agent:reaction` calls `onAgentReaction(message)`
  * when the user or the agent reacts to one; `activity:started` calls
@@ -2119,9 +2019,7 @@ export type HookKind =
 	| "resource:delete"
 	| "feed:article"
 	| "feed:delete"
-	| "article:save"
 	| "article:read"
-	| "article:tagged"
 	| "agent:message"
 	| "agent:reaction"
 	| "agent:turn:start"
@@ -2260,6 +2158,8 @@ export interface IntelligenceAgent {
 	 * apart from teams: a pinned agent stays on its team.
 	 */
 	team_id: number | null;
+	/** How many actor sessions not yet resolved the agent follows. */
+	following_count: number;
 }
 
 /** The color an agent is drawn in. */
@@ -2312,6 +2212,11 @@ export interface IntelligenceAgentMessage {
 	 * created`; `null` for foreground messages.
 	 */
 	run_description: string | null;
+	/**
+	 * What the message is to the fork `run_id` names; `null` for a message
+	 * of the conversation itself.
+	 */
+	run_part: AgentRunPart | null;
 	sent_at: number;
 	sender: IntelligenceAgentMessageSender;
 	/** What it says, stored as `kind` and the columns each kind sets. */
@@ -2341,7 +2246,7 @@ export interface IntelligenceAgentMessage {
 	 * follows `excerpt_verb`: the memory, the note, or what woke it
 	 * (`Actor session 264 stopped`, `Cue “Morning” fired`, `“Fix
 	 * the build” was assigned to you`). A compressed context's is
-	 * `Context compacted`, then why when it is known, with no verb.
+	 * `Context rebuilt`, then why when it is known, with no verb.
 	 */
 	excerpt: string;
 	/**
@@ -2642,8 +2547,6 @@ export type Invalidation =
 	| { kind: "connectorAccounts" }
 	| { kind: "resources"; id: number }
 	| { kind: "resourceKinds"; id: number }
-	| { kind: "articles"; id: number }
-	| { kind: "articleFolders"; id: number }
 	| { kind: "feeds" }
 	| { kind: "feedArticles" }
 	| { kind: "intelligence" }
@@ -2728,23 +2631,12 @@ export interface ListAgentRunsRequest {
 	limit: number;
 }
 
-/** Lists the live article folders in workspace `workspace_id`, in their order. */
-export interface ListArticleFoldersRequest {
-	workspace_id: number;
-}
-
 /**
  * Lists one page of the live articles `filter` covers, most recently
- * published first, without their contents. The inbox, `all` and folder
- * filters cover the articles saved to workspace `workspace_id`; the feed
- * filters cover feed items wherever they are saved.
+ * published first, without their contents.
  */
 export interface ListArticlesRequest {
-	workspace_id: number;
-	/** The inbox when absent. */
-	filter?: ArticleFilter;
-	/** Only articles with this tag of the workspace's. */
-	tag_id?: number | null;
+	filter: ArticleFilter;
 	/** How many of the covered articles to skip; none when absent. */
 	offset?: number;
 	/** The most articles to list: 50 when absent, and never over 500. */
@@ -2845,10 +2737,9 @@ export interface ListSecurityEventsRequest {
 	limit?: number | null;
 }
 
-/** Lists workspace `workspace_id`'s tags for `entity`, in their order. */
+/** Lists workspace `workspace_id`'s tags, in their order. */
 export interface ListTagsRequest {
 	workspace_id: number;
-	entity: TagEntity;
 }
 
 /** Lists task folders */
@@ -2953,15 +2844,11 @@ export interface MarkAgentReadRequest {
 }
 
 /**
- * Marks every unread live article `filter` covers as read, as listing it
- * with `workspace_id` would cover them: "mark all as read" for a view.
+ * Marks every unread live article `filter` covers as read: "mark all as
+ * read" for a view.
  */
 export interface MarkArticlesReadRequest {
-	workspace_id: number;
-	/** The inbox when absent. */
-	filter?: ArticleFilter;
-	/** Only articles with this tag of the workspace's. */
-	tag_id?: number | null;
+	filter: ArticleFilter;
 }
 
 /** A fact an agent keeps across conversations, in its own words. */
@@ -3056,16 +2943,6 @@ export interface ModelPrices {
 	output_token_cost: number;
 	cache_read_token_cost?: number | null;
 	cache_write_token_cost?: number | null;
-}
-
-/**
- * Files live article `article_id`, saved to workspace `workspace_id`, in
- * that workspace's folder `folder_id`, or its inbox when absent.
- */
-export interface MoveArticleRequest {
-	workspace_id: number;
-	article_id: number;
-	folder_id?: number | null;
 }
 
 /** Moves task `task_id` into folder `folder_id`, or the inbox when absent. */
@@ -3167,6 +3044,11 @@ export interface Profile {
 	id: number;
 	/** Their name, `null` until they set one; never empty. */
 	name: string | null;
+	/**
+	 * What they wrote about themselves, which every agent reads, `null` until
+	 * they write some; never empty, and at most 1,000 characters.
+	 */
+	bio: string | null;
 	/** Their photo, if they have set one. */
 	photo: Photo;
 }
@@ -3180,8 +3062,7 @@ export interface ProviderWording {
 
 /**
  * Removes the items of feeds `feed_ids` published before `before` (Unix
- * seconds) that no workspace has saved. A removed item isn't added again
- * when its feed is next read.
+ * seconds). A removed item isn't added again when its feed is next read.
  */
 export interface PruneFeedsRequest {
 	feed_ids: number[];
@@ -3191,8 +3072,8 @@ export interface PruneFeedsRequest {
 /**
  * How precisely an article's publication is known.
  *
- * - `"time"`: the moment it was published, or saved when its page gives
- *   no date.
+ * - `"time"`: the moment it was published, or brought in when neither its
+ *   feed nor its page gives a date.
  * - `"day"`: only the day: `publishedAt` is that day's midnight UTC, to be
  *   shown as that date in every time zone.
  */
@@ -3269,6 +3150,16 @@ export interface RedactedIntelligenceEndpoint {
 	backend: RedactedEndpointBackend;
 }
 
+/** An article after its page was fetched again. */
+export interface RefetchedArticle {
+	article: Article;
+	/**
+	 * Why this fetch failed, when it did. An article whose page was fetched
+	 * before keeps that snapshot; one never fetched records the failure.
+	 */
+	failure: ArticleFetchFailure | null;
+}
+
 /** Reads live feed `feed_id` now, adding the items it hasn't seen. */
 export interface RefreshFeedRequest {
 	feed_id: number;
@@ -3341,14 +3232,7 @@ export interface RenameAgentTeamRequest {
 	title: string;
 }
 
-/** Retitles article folder `folder_id`. */
-export interface RenameArticleFolderRequest {
-	workspace_id: number;
-	folder_id: number;
-	title: string;
-}
-
-/** Retitles live article `article_id`, in every workspace it is saved to. */
+/** Retitles live article `article_id`. */
 export interface RenameArticleRequest {
 	article_id: number;
 	title: string;
@@ -3436,16 +3320,6 @@ export type RenderedMermaid =
 	message: string;
 };
 
-/**
- * Puts a workspace's article folders in the order of `folder_ids`, first to
- * last.
- */
-export interface ReorderArticleFoldersRequest {
-	workspace_id: number;
-	/** Every live article folder in the workspace, in its new order. */
-	folder_ids: number[];
-}
-
 /** Puts the feeds in the order of `feed_ids`, first to last. */
 export interface ReorderFeedsRequest {
 	/** Every live feed, in its new order. */
@@ -3469,13 +3343,12 @@ export interface ReorderSavedTaskViewsRequest {
 }
 
 /**
- * Puts workspace `workspace_id`'s tags for `entity` in the order of
- * `tag_ids`, first to last.
+ * Puts workspace `workspace_id`'s tags in the order of `tag_ids`, first to
+ * last.
  */
 export interface ReorderTagsRequest {
 	workspace_id: number;
-	entity: TagEntity;
-	/** Every tag of that kind in the workspace, in its new order. */
+	/** Every tag in the workspace, in its new order. */
 	tag_ids: number[];
 }
 
@@ -3645,29 +3518,6 @@ export interface RunScriptRequest {
 }
 
 /**
- * Fetches the page at `url` (http or https) and saves it to workspace
- * `workspace_id` with a snapshot of its text. A URL already saved there is
- * re-fetched instead of added again; a live article with that URL saved
- * elsewhere, or brought in by a feed, is saved there too and re-fetched;
- * otherwise a new, unread article is added.
- */
-export interface SaveArticleRequest {
-	workspace_id: number;
-	url: string;
-}
-
-/** An article after its page was fetched. */
-export interface SavedArticle {
-	article: Article;
-	/**
-	 * Why this fetch failed, when it did. An article whose page was fetched
-	 * before keeps that snapshot; one never fetched is saved with a failed
-	 * snapshot.
-	 */
-	failure: ArticleFetchFailure | null;
-}
-
-/**
  * A way of looking at a workspace's tasks kept under a name: which tasks it
  * lists, the tags, priorities and sizes that narrow them, and the order they
  * come in.
@@ -3740,14 +3590,13 @@ export interface SearchDocumentRequest {
 }
 
 /**
- * What kind of item a search result points at: `"document"`, `"task"`,
- * `"resource"` or `"article"`.
+ * What kind of item a search result points at: `"document"`, `"task"` or
+ * `"resource"`.
  */
 export type SearchEntityKind =
 	| "document"
 	| "task"
-	| "resource"
-	| "article";
+	| "resource";
 
 /**
  * Asks every extension with the `registry` permission granted for the
@@ -3759,7 +3608,7 @@ export interface SearchExtensionRegistriesRequest {
 
 /**
  * One page of the full-text matches among the articles that came from
- * feeds, saved to a workspace or not, best first. `query` is FTS5 syntax.
+ * feeds, best first. `query` is FTS5 syntax.
  */
 export interface SearchFeedCorpusRequest {
 	query: string;
@@ -3772,8 +3621,8 @@ export interface SearchFeedCorpusRequest {
 }
 
 /**
- * One full-text search hit: a snapshot of the matched document's, task's,
- * resource's or article's indexed text, plus a pointer back to it.
+ * One full-text search hit: a snapshot of the matched document's, task's or
+ * resource's indexed text, plus a pointer back to it.
  */
 export interface SearchResult {
 	/**
@@ -3782,11 +3631,11 @@ export interface SearchResult {
 	 * This is **not** the matched item's id; that is the entity id.
 	 */
 	id: number;
-	/** Whether the hit is a document, a task, a resource or an article. */
+	/** Whether the hit is a document, a task or a resource. */
 	entity_kind: SearchEntityKind;
 	/**
-	 * Id of the matched document, task, resource or article (which one depends on
-	 * the entity kind).
+	 * Id of the matched document, task or resource (which one depends on the
+	 * entity kind).
 	 */
 	entity_id: number;
 	/** Id of the workspace the matched item belongs to. */
@@ -3794,8 +3643,8 @@ export interface SearchResult {
 	/** The matched item's title. */
 	title: string | null;
 	/**
-	 * The matched document's full contents, a Markdown resource's or an article's
-	 * page text; always `""` for tasks and JSON resources.
+	 * The matched document's full contents or a Markdown resource's text;
+	 * always `""` for tasks and JSON resources.
 	 */
 	contents: string;
 }
@@ -3971,32 +3820,10 @@ export interface SetAgentTeamRequest {
 	team_id?: number | null;
 }
 
-/**
- * Marks live article `article_id` read or unread. Read is one flag every
- * workspace shares.
- */
+/** Marks live article `article_id` read or unread. */
 export interface SetArticleReadRequest {
 	article_id: number;
 	read: boolean;
-}
-
-/**
- * Saves live article `article_id` to workspace `workspace_id`, or unsaves it
- * from there. An article is saved to any number of workspaces at once.
- *
- * `saved: true` files it in the workspace's inbox; one already saved there
- * stays where it is filed. A workspace has one live article per URL, so
- * saving a feed item whose URL another article saved there has throws.
- *
- * `saved: false` takes it out of the workspace and its folder there. An
- * article from a feed stays in the feed corpus; one saved by hand that is
- * then in no workspace is deleted, which is how such an article is deleted.
- * One not saved there stays as it is.
- */
-export interface SetArticleSavedRequest {
-	workspace_id: number;
-	article_id: number;
-	saved: boolean;
 }
 
 /**
@@ -4037,15 +3864,6 @@ export interface SetExtensionPermissionRequest {
 export interface SetFeedFullPagePolicyRequest {
 	feed_id: number;
 	full_page_policy: FeedFullPagePolicy;
-}
-
-/**
- * Sets what reads live feed `feed_id`'s items' pages. Items already added
- * keep their text.
- */
-export interface SetFeedParserRequest {
-	feed_id: number;
-	parser: ArticleParser;
 }
 
 /** Makes endpoint model `endpoint_model_id` the default for `tier`. */
@@ -4091,6 +3909,14 @@ export interface SetIntelligenceSpendLimitRequest {
 }
 
 /**
+ * Sets the user's bio, without the spaces around it, or removes it when it
+ * is `null` or empty. A bio past 1,000 characters is refused.
+ */
+export interface SetProfileBioRequest {
+	bio: string | null;
+}
+
+/**
  * Sets the user's name, without the spaces around it, or removes it when
  * it is `null` or empty.
  */
@@ -4115,14 +3941,13 @@ export interface SetResourceKindShownRequest {
 }
 
 /**
- * Puts tag `tag_id` of workspace `workspace_id` on the task or article
- * `entity_id`, or takes it off. A task tag goes on the workspace's tasks,
- * an article tag on the articles saved to it.
+ * Puts tag `tag_id` of workspace `workspace_id` on the workspace's task
+ * `task_id`, or takes it off.
  */
 export interface SetTaggedRequest {
 	workspace_id: number;
 	tag_id: number;
-	entity_id: number;
+	task_id: number;
 	tagged: boolean;
 }
 
@@ -4251,36 +4076,19 @@ export interface StorageSettings {
 	memory_limit: number;
 }
 
-/**
- * A name a workspace puts on its tasks, or on the articles saved to it, to
- * group them across folders.
- */
+/** A name a workspace puts on its tasks, to group them across folders. */
 export interface Tag {
 	/** Unique, stable identifier. */
 	id: number;
 	/** Id of the workspace the tag belongs to. */
 	workspace_id: number;
-	/** What the tag is put on. */
-	entity: TagEntity;
-	/** Unique, ignoring case, among the workspace's tags of its kind. */
+	/** Unique, ignoring case, among the workspace's tags. */
 	name: string;
-	/** Position among the workspace's tags of its kind, first to last. */
+	/** Position among the workspace's tags, first to last. */
 	sort_order: number;
 	/** In Unix seconds. */
 	created_at: number;
 }
-
-/**
- * What a tag is put on; stored as text.
- *
- * Each kind has its own tags in a workspace.
- *
- * - `"task"`: tasks.
- * - `"article"`: articles saved to the tag's workspace.
- */
-export type TagEntity =
-	| "task"
-	| "article";
 
 /**
  * Which tags the items a listing covers must carry, and which they must
@@ -4292,19 +4100,8 @@ export interface TagFilter {
 	without: number[];
 }
 
-/** The ids of the tags on an item; read from a JSON array. */
+/** The ids of the tags on a task; read from a JSON array. */
 export type TagIds = number[];
-
-/** The item a tag was put on or taken off, as its listing shows it. */
-export type TaggedItem =
-	| {
-	entity: "task";
-	task: Task;
-}
-	| {
-	entity: "article";
-	article: ArticleSummary;
-};
 
 /** A to-do item in a workspace, optionally filed in a task folder. */
 export interface Task {
@@ -4940,23 +4737,17 @@ export interface Requests {
 	reorderSavedTaskViews: ReorderSavedTaskViewsRequest;
 	/** Deletes saved task view `view_id` in a workspace. */
 	deleteSavedTaskView: DeleteSavedTaskViewRequest;
-	/** Lists a workspace's tags for tasks or for articles, in their order. */
+	/** Lists a workspace's tags, in their order. */
 	listTags: ListTagsRequest;
-	/** Creates a tag for tasks or for articles in a workspace. */
+	/** Creates a tag in a workspace. */
 	createTag: CreateTagRequest;
 	/** Renames tag `tag_id` in a workspace. */
 	renameTag: RenameTagRequest;
-	/**
-	 * Reorders a workspace's tags for tasks or for articles; replies with
-	 * them in their new order.
-	 */
+	/** Reorders a workspace's tags; replies with them in their new order. */
 	reorderTags: ReorderTagsRequest;
 	/** Deletes tag `tag_id` in a workspace, taking it off everything. */
 	deleteTag: DeleteTagRequest;
-	/**
-	 * Puts a tag on a task or article, or takes it off; replies with the
-	 * item as its listing shows it.
-	 */
+	/** Puts a tag on a task or takes it off; replies with the task. */
 	setTagged: SetTaggedRequest;
 	/** Lists a workspace's live contacts, by last name, then first name. */
 	listContacts: ListContactsRequest;
@@ -5123,6 +4914,8 @@ export interface Requests {
 	getProfile: NoArgs;
 	/** Sets or removes the user's name. */
 	setProfileName: SetProfileNameRequest;
+	/** Sets the user's bio, or removes it when it is `null` or empty. */
+	setProfileBio: SetProfileBioRequest;
 	/** Sets or removes the user's photo. */
 	setProfilePhoto: SetProfilePhotoRequest;
 	/** Creates an agent. */
@@ -5265,15 +5058,10 @@ export interface Requests {
 	/** Reorders the kinds of resource shown in a workspace. */
 	reorderWorkspaceResourceKinds: ReorderWorkspaceResourceKindsRequest;
 	/**
-	 * Lists a page of the live articles in a workspace's inbox, a folder or
-	 * a feed, most recently published first, without their contents.
+	 * Lists a page of the live articles from a feed, or from every feed, most
+	 * recently published first, without their contents.
 	 */
 	listArticles: ListArticlesRequest;
-	/**
-	 * Saves live article `article_id` to a workspace or unsaves it from
-	 * there; replies with it as that workspace lists it.
-	 */
-	setArticleSaved: SetArticleSavedRequest;
 	/** Marks live article `article_id` read or unread. */
 	setArticleRead: SetArticleReadRequest;
 	/** Marks every unread article a listing covers as read. */
@@ -5292,39 +5080,14 @@ export interface Requests {
 	reorderFeeds: ReorderFeedsRequest;
 	/** Sets when live feed `feed_id`'s items are read from their pages. */
 	setFeedFullPagePolicy: SetFeedFullPagePolicyRequest;
-	/** Sets what reads live feed `feed_id`'s items' pages. */
-	setFeedParser: SetFeedParserRequest;
-	/** Stops following feed `feed_id`, removing its unsaved items. */
+	/** Stops following feed `feed_id`, removing its items. */
 	deleteFeed: DeleteFeedRequest;
-	/** Removes feeds' unsaved items published before a time. */
+	/** Removes feeds' items published before a time. */
 	pruneFeeds: PruneFeedsRequest;
 	/** A page of the full-text matches among the articles from feeds. */
 	searchFeedCorpus: SearchFeedCorpusRequest;
-	/**
-	 * Files live article `article_id` in a workspace's folder, or its inbox
-	 * when absent; replies with it as that workspace lists it.
-	 */
-	moveArticle: MoveArticleRequest;
-	/** Lists a workspace's article folders in their order. */
-	listArticleFolders: ListArticleFoldersRequest;
-	/** Adds an article folder, last in its workspace's order. */
-	createArticleFolder: CreateArticleFolderRequest;
-	/** Retitles article folder `folder_id` in a workspace. */
-	renameArticleFolder: RenameArticleFolderRequest;
-	/**
-	 * Reorders a workspace's article folders; replies with them in their new
-	 * order.
-	 */
-	reorderArticleFolders: ReorderArticleFoldersRequest;
-	/** Deletes article folder `folder_id`; its articles move to the inbox. */
-	deleteArticleFolder: DeleteArticleFolderRequest;
-	/** Fetches live article `article_id` as a workspace's reader shows it. */
+	/** Fetches live article `article_id`, whole. */
 	getArticle: GetArticleRequest;
-	/**
-	 * Fetches a page and saves it to a workspace as an article, or re-fetches
-	 * the article already saved with that URL.
-	 */
-	saveArticle: SaveArticleRequest;
 	/** Fetches live article `article_id`'s page again. */
 	resnapshotArticle: ResnapshotArticleRequest;
 	/** Retitles live article `article_id`. */
@@ -5414,24 +5177,18 @@ export interface Replies {
 	reorderSavedTaskViews: SavedTaskView[];
 	/** Deletes saved task view `view_id` in a workspace. */
 	deleteSavedTaskView: SavedTaskView;
-	/** Lists a workspace's tags for tasks or for articles, in their order. */
+	/** Lists a workspace's tags, in their order. */
 	listTags: Tag[];
-	/** Creates a tag for tasks or for articles in a workspace. */
+	/** Creates a tag in a workspace. */
 	createTag: Tag;
 	/** Renames tag `tag_id` in a workspace. */
 	renameTag: Tag;
-	/**
-	 * Reorders a workspace's tags for tasks or for articles; replies with
-	 * them in their new order.
-	 */
+	/** Reorders a workspace's tags; replies with them in their new order. */
 	reorderTags: Tag[];
 	/** Deletes tag `tag_id` in a workspace, taking it off everything. */
 	deleteTag: Tag;
-	/**
-	 * Puts a tag on a task or article, or takes it off; replies with the
-	 * item as its listing shows it.
-	 */
-	setTagged: TaggedItem;
+	/** Puts a tag on a task or takes it off; replies with the task. */
+	setTagged: Task;
 	/** Lists a workspace's live contacts, by last name, then first name. */
 	listContacts: Contact[];
 	/** Fetches live contact `contact_id` in a workspace. */
@@ -5597,6 +5354,8 @@ export interface Replies {
 	getProfile: Profile;
 	/** Sets or removes the user's name. */
 	setProfileName: Profile;
+	/** Sets the user's bio, or removes it when it is `null` or empty. */
+	setProfileBio: Profile;
 	/** Sets or removes the user's photo. */
 	setProfilePhoto: Profile;
 	/** Creates an agent. */
@@ -5739,15 +5498,10 @@ export interface Replies {
 	/** Reorders the kinds of resource shown in a workspace. */
 	reorderWorkspaceResourceKinds: WorkspaceResourceKind[];
 	/**
-	 * Lists a page of the live articles in a workspace's inbox, a folder or
-	 * a feed, most recently published first, without their contents.
+	 * Lists a page of the live articles from a feed, or from every feed, most
+	 * recently published first, without their contents.
 	 */
 	listArticles: ArticlePage;
-	/**
-	 * Saves live article `article_id` to a workspace or unsaves it from
-	 * there; replies with it as that workspace lists it.
-	 */
-	setArticleSaved: ArticleSummary;
 	/** Marks live article `article_id` read or unread. */
 	setArticleRead: Article;
 	/** Marks every unread article a listing covers as read. */
@@ -5766,41 +5520,16 @@ export interface Replies {
 	reorderFeeds: FeedSummary[];
 	/** Sets when live feed `feed_id`'s items are read from their pages. */
 	setFeedFullPagePolicy: Feed;
-	/** Sets what reads live feed `feed_id`'s items' pages. */
-	setFeedParser: Feed;
-	/** Stops following feed `feed_id`, removing its unsaved items. */
+	/** Stops following feed `feed_id`, removing its items. */
 	deleteFeed: Feed;
-	/** Removes feeds' unsaved items published before a time. */
+	/** Removes feeds' items published before a time. */
 	pruneFeeds: FeedCleanup;
 	/** A page of the full-text matches among the articles from feeds. */
 	searchFeedCorpus: FeedCorpusPage;
-	/**
-	 * Files live article `article_id` in a workspace's folder, or its inbox
-	 * when absent; replies with it as that workspace lists it.
-	 */
-	moveArticle: ArticleSummary;
-	/** Lists a workspace's article folders in their order. */
-	listArticleFolders: ArticleFolder[];
-	/** Adds an article folder, last in its workspace's order. */
-	createArticleFolder: ArticleFolder;
-	/** Retitles article folder `folder_id` in a workspace. */
-	renameArticleFolder: ArticleFolder;
-	/**
-	 * Reorders a workspace's article folders; replies with them in their new
-	 * order.
-	 */
-	reorderArticleFolders: ArticleFolder[];
-	/** Deletes article folder `folder_id`; its articles move to the inbox. */
-	deleteArticleFolder: ArticleFolder;
-	/** Fetches live article `article_id` as a workspace's reader shows it. */
-	getArticle: ArticleDetail;
-	/**
-	 * Fetches a page and saves it to a workspace as an article, or re-fetches
-	 * the article already saved with that URL.
-	 */
-	saveArticle: SavedArticle;
+	/** Fetches live article `article_id`, whole. */
+	getArticle: Article;
 	/** Fetches live article `article_id`'s page again. */
-	resnapshotArticle: SavedArticle;
+	resnapshotArticle: RefetchedArticle;
 	/** Retitles live article `article_id`. */
 	renameArticle: Article;
 }
