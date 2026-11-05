@@ -36,7 +36,7 @@ function fakeDaemon() {
 					}
 					const frame = JSON.parse(line) as ClientFrame & { id: number };
 					heard.push(frame);
-					if (frame.type === 'actorTaskUpdate' && frame.kind === 'message') {
+					if (frame.type === 'actorSessionUpdate' && frame.kind === 'message') {
 						const content = frame.content.kind === 'toolUse' ? { ...frame.content, ended_at: null } : frame.content;
 						transcript.push({ id: transcript.length + 1, content: { sender: 'actor', ...content } });
 						if (state.drop) {
@@ -45,10 +45,10 @@ function fakeDaemon() {
 						}
 					}
 					const data =
-						frame.type === 'listActorTaskMessages'
-							? { type: 'actorTaskMessages', data: transcript }
-							: frame.type === 'actorTaskUpdate' && frame.kind === 'message'
-								? { type: 'actorTaskMessage', data: { id: transcript.length } }
+						frame.type === 'listActorSessionMessages'
+							? { type: 'actorSessionMessages', data: transcript }
+							: frame.type === 'actorSessionUpdate' && frame.kind === 'message'
+								? { type: 'actorSessionMessage', data: { id: transcript.length } }
 								: { type: 'accepted', data: null };
 					reply({ type: 'reply', id: frame.id, ok: data });
 				}
@@ -61,7 +61,7 @@ function fakeDaemon() {
 const offers = { actors: [] };
 const text = (text: string) => ({ kind: 'message', content: { kind: 'text', text } }) as const;
 const updates = (heard: ClientFrame[]) =>
-	heard.filter((frame) => frame.type === 'actorTaskUpdate').map((frame) => ('content' in frame ? frame.content : frame.kind));
+	heard.filter((frame) => frame.type === 'actorSessionUpdate').map((frame) => ('content' in frame ? frame.content : frame.kind));
 
 test('updates made while offline are sent after onConnect, in order', async () => {
 	const daemon = fakeDaemon();
@@ -75,7 +75,7 @@ test('updates made while offline are sent after onConnect, in order', async () =
 	void client.run();
 	expect((await first).id).toBe(1);
 	await second;
-	expect(daemon.heard.map((frame) => frame.type)).toEqual(['hello', 'actorTaskUpdate', 'actorTaskUpdate', 'actorTaskUpdate']);
+	expect(daemon.heard.map((frame) => frame.type)).toEqual(['hello', 'actorSessionUpdate', 'actorSessionUpdate', 'actorSessionUpdate']);
 	expect(updates(daemon.heard)).toEqual(['status', { kind: 'text', text: 'one' }, 'progress']);
 	client.stop();
 });

@@ -7,7 +7,7 @@ import type {
 	ActorMessageContent,
 	ActorMode,
 	ActorModel,
-	ActorTaskStatus,
+	ActorSessionStatus,
 	ActorUsage,
 	ActorUserContent,
 	ContextUsage,
@@ -36,9 +36,9 @@ export interface ActorDefinition {
 	product: string;
 	/** Where it works, such as a directory. */
 	scope: string;
-	/** How it can run a task, the first the default; none when it has one way only. */
+	/** How it can run a session, the first the default; none when it has one way only. */
 	modes: ActorMode[];
-	/** The models it can run a task on, the first the default; none when it picks for itself. */
+	/** The models it can run a session on, the first the default; none when it picks for itself. */
 	models: ActorModel[];
 }
 
@@ -66,12 +66,12 @@ export interface ClientImage {
 /** The calls to an actor (`ClientCall`), each answered with `accepted`. */
 export type ActorCall =
 	| {
-			kind: 'startActorTask';
+			kind: 'startActorSession';
 			actor: string;
-			task_id: number;
+			session_id: number;
 			prompt: string;
 			/**
-			 * The title the task was started with, or `null` when Cohesion
+			 * The title the session was started with, or `null` when Cohesion
 			 * took the prompt's first line, which a `title` report may
 			 * replace; a daemon from before titles leaves it out.
 			 */
@@ -84,16 +84,16 @@ export type ActorCall =
 			effort: string | null;
 	  }
 	| {
-			kind: 'sendActorTaskMessage';
+			kind: 'sendActorSessionMessage';
 			actor: string;
-			task_id: number;
+			session_id: number;
 			message_id: number;
 			content: ActorUserContent;
 			/** The images attached to it; a daemon from before images leaves it out. */
 			images?: ClientImage[];
 	  }
-	| { kind: 'stopActorTask'; actor: string; task_id: number }
-	| { kind: 'setActorTaskMode'; actor: string; task_id: number; mode: string };
+	| { kind: 'stopActorSession'; actor: string; session_id: number }
+	| { kind: 'setActorSessionMode'; actor: string; session_id: number; mode: string };
 
 /** What the daemon asks a client to do: every call is one of its actors'. */
 export type ClientCall = ActorCall;
@@ -104,17 +104,17 @@ export type ClientResult = { kind: 'accepted' };
 // ---- Actor updates ---------------------------------------------------------
 
 /**
- * One thing an actor reports about a task, tagged by `kind`
- * (`ActorTaskReport`). A message's `images` show below it; left out, none.
+ * One thing an actor reports about a session, tagged by `kind`
+ * (`ActorSessionReport`). A message's `images` show below it; left out, none.
  * An `end` names the `toolUse` message whose tool finished by the `id`
- * its reply carried. A `context` replaces how full the task's context
- * window was said to be. A `title` renames the task and its activity,
+ * its reply carried. A `context` replaces how full the session's context
+ * window was said to be. A `title` renames the session and its activity,
  * replacing the current title (its first line, cut past 80 characters;
  * never blank); the same title again changes nothing.
  */
-export type ActorTaskReport =
+export type ActorSessionReport =
 	| { kind: 'message'; content: ActorSaidContent; images?: ClientImage[] }
-	| { kind: 'status'; status: ActorTaskStatus }
+	| { kind: 'status'; status: ActorSessionStatus }
 	| { kind: 'progress'; progress: string | null }
 	| { kind: 'end'; message_id: number }
 	| { kind: 'context'; context: ContextUsage }
@@ -138,13 +138,13 @@ export type ClientFrame =
 	| { type: 'subscribe'; id: number }
 	| ({ type: 'hello'; id: number } & ClientCapabilities)
 	| ({ type: 'callResult'; call_id: number } & ({ ok: ClientResult } | { error: string }))
-	| ({ type: 'actorTaskUpdate'; id: number; task_id: number } & ActorTaskReport)
+	| ({ type: 'actorSessionUpdate'; id: number; session_id: number } & ActorSessionReport)
 	| ActorUsageUpdate;
 
 /**
  * How much of its plan's limits one of the client's actors has used,
  * replacing what it said before; with no `plan`, it says nothing
- * (`ActorUsageUpdate`). A task's context is its own `context` report.
+ * (`ActorUsageUpdate`). A session's context is its own `context` report.
  */
 export type ActorUsageUpdate = { type: 'actorUsage'; id: number; actor: string } & ActorUsage;
 

@@ -30,7 +30,7 @@ export type AccountHost =
  * A unit of long-running work Cohesion shows the user while it goes on and
  * keeps once it ends: its title, what it is, where it stands and, while it
  * runs, a short line on its progress. The work itself is owned elsewhere
- * (an actor's task); only `ActivityTracker` writes these rows.
+ * (an actor's session); only `ActivityTracker` writes these rows.
  */
 export interface Activity {
 	id: number;
@@ -51,9 +51,9 @@ export interface Activity {
 /** What an activity is. */
 export type ActivityKind =
 	| {
-	kind: "actorTask";
-	/** The task it shows. */
-	actor_task_id: number;
+	kind: "actorSession";
+	/** The session it shows. */
+	actor_session_id: number;
 };
 
 /**
@@ -74,13 +74,13 @@ export type ActivityStatus =
 
 /**
  * An agent on a client's device, such as Claude Code in one directory,
- * that Cohesion hands tasks to: a client offers each in its `Hello`, and
- * works each task in the actor's own system, reporting back what it says
+ * that Cohesion hands sessions to: a client offers each in its `Hello`, and
+ * works each session in the actor's own system, reporting back what it says
  * and where it stands.
  *
  * An actor has no name of its own: every read takes its client's name
  * (a join of `clients`), so renaming the client renames its actors. One
- * its client no longer offers is soft-deleted, keeping its tasks.
+ * its client no longer offers is soft-deleted, keeping its sessions.
  */
 export interface Actor {
 	id: number;
@@ -93,9 +93,9 @@ export interface Actor {
 	product: string;
 	/** Where it works, such as a directory: `/Users/jackson/Developer/cohesion`. */
 	scope: string;
-	/** How it can run a task, the first the default. */
+	/** How it can run a session, the first the default. */
 	modes: ActorMode[];
-	/** The models it can run a task on, the first the default. */
+	/** The models it can run a session on, the first the default. */
 	models: ActorModel[];
 	/**
 	 * The product on its client's current name, such as "Claude Code on
@@ -134,7 +134,7 @@ export type ActorFileChangeKind =
 	| "delete";
 
 /**
- * What an actor says in a task, tagged by `kind`.
+ * What an actor says in a session, tagged by `kind`.
  *
  * - `"text"`: the agent's own words, as Markdown.
  * - `"thinking"`: its reasoning on the way, as Markdown: a summary or the
@@ -148,7 +148,7 @@ export type ActorFileChangeKind =
  * - `"plan"`: a plan it asks the user to approve before it starts
  *   (Claude Code's `ExitPlanMode`).
  *
- * The last three are requests: the task waits for the user's response.
+ * The last three are requests: the session waits for the user's response.
  */
 export type ActorMessageContent =
 	| {
@@ -196,7 +196,7 @@ export type ActorMessageContent =
 };
 
 /**
- * One way an actor can run a task, such as sandboxed or accepting edits on
+ * One way an actor can run a session, such as sandboxed or accepting edits on
  * its own.
  */
 export interface ActorMode {
@@ -207,7 +207,7 @@ export interface ActorMode {
 	description: string | null;
 }
 
-/** A model an actor can run a task on, and how hard it can make it think. */
+/** A model an actor can run a session on, and how hard it can make it think. */
 export interface ActorModel {
 	identifier: string;
 	/** The model as people know it, such as "Opus". */
@@ -223,7 +223,7 @@ export interface ActorModel {
  * What the user decides about an actor's permission request.
  *
  * - `"allow"`: this once.
- * - `"allowForSession"`: this and the like for the rest of the task.
+ * - `"allowForSession"`: this and the like for the rest of the session.
  * - `"deny"`: not this; the actor carries on without it.
  * - `"abort"`: not this, and stop what it is doing.
  */
@@ -290,13 +290,13 @@ export interface ActorQuestionOption {
 }
 
 /**
- * One task an actor works on, such as a Claude Code session: a thread in
+ * One session an actor works on, such as a Claude Code session: a thread in
  * the actor's own system, which it reports to Cohesion as it goes. While
- * it works, or needs the user, an activity shows it. A task stays until the
+ * it works, or needs the user, an activity shows it. A session stays until the
  * user, or an agent for them, resolves it, and never ends for good: a
  * message to one that is done, failed or resolved starts it again.
  */
-export interface ActorTask {
+export interface ActorSession {
 	id: number;
 	actor_id: number;
 	title: string;
@@ -307,10 +307,10 @@ export interface ActorTask {
 	/** The model's reasoning effort; `null` for the model's default. */
 	effort: string | null;
 	started_at: number;
-	/** When its status last changed, which orders the tasks. */
+	/** When its status last changed, which orders the sessions. */
 	status_changed_at: number;
 	/** Where it stands, as its actor last reported. */
-	status: ActorTaskStatus;
+	status: ActorSessionStatus;
 	/**
 	 * Whether its actor finished a stretch of work, done or failed, since
 	 * the user last read it; stopping it, or its client going away, doesn't.
@@ -327,28 +327,28 @@ export interface ActorTask {
 	 * The agent following it, the last to tell it something, which hears
 	 * each time it stops on its own; `null` when none does.
 	 */
-	follower: ActorTaskFollower | null;
+	follower: ActorSessionFollower | null;
 }
 
 /**
- * The agent following an actor task, and who started the chain of work that
- * told the task something, which the follower's fork inherits.
+ * The agent following an actor session, and who started the chain of work that
+ * told the session something, which the follower's fork inherits.
  */
-export interface ActorTaskFollower {
+export interface ActorSessionFollower {
 	agent_id: number;
 	initiative: Initiative;
 }
 
-/** One entry in an actor task's transcript. */
-export interface ActorTaskMessage {
+/** One entry in an actor session's transcript. */
+export interface ActorSessionMessage {
 	id: number;
-	task_id: number;
+	session_id: number;
 	sent_at: number;
 	/**
 	 * Who said it and what, stored as `sender`, `kind` and the columns they
 	 * set.
 	 */
-	content: ActorTaskMessageContent;
+	content: ActorSessionMessageContent;
 	/**
 	 * Whether the user has answered it; only a request can be. A request
 	 * is answered by its response, or passed over by anything the user
@@ -357,25 +357,25 @@ export interface ActorTaskMessage {
 	answered: boolean;
 	/**
 	 * How many images came with it, the user's or the actor's;
-	 * `ListActorTaskMessageAttachments` fetches them.
+	 * `ListActorSessionMessageAttachments` fetches them.
 	 */
 	attachment_count: number;
 }
 
 /**
- * Who said an actor task message, tagged by `sender`, and what it says,
+ * Who said an actor session message, tagged by `sender`, and what it says,
  * tagged by `kind`.
  */
-export type ActorTaskMessageContent =
+export type ActorSessionMessageContent =
 	| ({ sender: "actor" } & ActorMessageContent)
 	| ({ sender: "user" } & ActorUserContent);
 
 /**
- * An actor task matching a full-text search of the tasks' titles and
+ * An actor session matching a full-text search of the sessions' titles and
  * what the user and the actor said in them, with the passage that
  * matched. Read only by the search, which joins each match as `hit`.
  */
-export interface ActorTaskSearchHit {
+export interface ActorSessionSearchHit {
 	id: number;
 	actor_id: number;
 	title: string;
@@ -388,7 +388,7 @@ export interface ActorTaskSearchHit {
 }
 
 /**
- * Where an actor task stands.
+ * Where an actor session stands.
  *
  * - `"working"`: the actor is at it.
  * - `"needsAttention"`: the actor is waiting on the user, such as for a
@@ -397,14 +397,14 @@ export interface ActorTaskSearchHit {
  * - `"failed"`: the actor couldn't go on; the user may say more to try
  *   again.
  * - `"resolved"`: the user, or an agent for them, is done with it; lists
- *   of tasks leave it out, and it is deleted once it has sat resolved
- *   for the actor task retention. The user may say more to start it
+ *   of sessions leave it out, and it is deleted once it has sat resolved
+ *   for the actor session retention. The user may say more to start it
  *   again.
  *
- * A working task, or one that needs attention, has an activity open, which
+ * A working session, or one that needs attention, has an activity open, which
  * ends succeeded as it goes idle and failed as it fails.
  */
-export type ActorTaskStatus =
+export type ActorSessionStatus =
 	| "working"
 	| "needsAttention"
 	| "idle"
@@ -412,14 +412,14 @@ export type ActorTaskStatus =
 	| "resolved";
 
 /**
- * How an actor task stopped on its own: each wakes the agent following it.
+ * How an actor session stopped on its own: each wakes the agent following it.
  *
  * - `"needsYou"`: the actor waits on the user.
  * - `"finished"`: the actor finished its turn.
  * - `"failed"`: the actor couldn't go on.
- * - `"interrupted"`: the task's device went away mid-turn.
+ * - `"interrupted"`: the session's device went away mid-turn.
  */
-export type ActorTaskStop =
+export type ActorSessionStop =
 	| "needsYou"
 	| "finished"
 	| "failed"
@@ -435,7 +435,7 @@ export type ActorTaskStop =
  * - `"search"`: searches files or their contents (`Grep`, `Glob`).
  * - `"web"`: fetches or searches the web (`WebFetch`, `WebSearch`).
  * - `"agent"`: hands work to another agent (`Agent`).
- * - `"skill"`: takes up a skill, instructions it loads for the task
+ * - `"skill"`: takes up a skill, instructions it loads for the session
  *   (`Skill`).
  * - `"other"`: anything else, and a tool its client didn't classify.
  */
@@ -451,8 +451,8 @@ export type ActorToolKind =
 
 /**
  * How much of its plan's limits an actor has used, as its client last
- * reported. A task's context window is its own, which it reports as the
- * task's `context`.
+ * reported. A session's context window is its own, which it reports as the
+ * session's `context`.
  */
 export interface ActorUsage {
 	/**
@@ -468,9 +468,9 @@ export interface ActorUsage {
 }
 
 /**
- * What the user says in an actor task, tagged by `kind`.
+ * What the user says in an actor session, tagged by `kind`.
  *
- * - `"text"`: a message, the first the task's prompt.
+ * - `"text"`: a message, the first the session's prompt.
  * - `"answers"`: the answers to a `question`, one per question in order.
  * - `"permission"`: the decision on a `permission` request.
  * - `"plan"`: whether a `plan` is approved.
@@ -685,7 +685,7 @@ export type AgentMemoryChange =
  * - `"note"`: what the agent noted for its own later turns, which nobody
  *   is told of.
  * - `"woke"`: why the agent woke apart from its conversation: a cue fired,
- *   or an actor task it follows stopped. What that work posts follows,
+ *   or an actor session it follows stopped. What that work posts follows,
  *   marked with its run.
  * - `"compressedContext"`: the agent's turn started a fresh model thread
  *   from a summary of the conversation rather than carrying on its last
@@ -750,10 +750,10 @@ export type AgentWake =
 	hook: HookKind;
 }
 	| {
-	kind: "actorTask";
-	actor_task_id: number;
+	kind: "actorSession";
+	actor_session_id: number;
 	title: string;
-	stop: ActorTaskStop;
+	stop: ActorSessionStop;
 }
 	| {
 	kind: "assignedTask";
@@ -1008,13 +1008,13 @@ export interface Attachment {
  * The message an attachment came with, by which conversation it is in. Real
  * foreign keys, so a message's attachments cascade with it.
  *
- * - `"actorTask"`: a message in an actor task.
+ * - `"actorSession"`: a message in an actor session.
  * - `"agent"`: a message in an agent's conversation.
  */
 export type AttachmentMessage =
 	| {
-	kind: "actorTask";
-	actor_task_message_id: number;
+	kind: "actorSession";
+	actor_session_message_id: number;
 }
 	| {
 	kind: "agent";
@@ -1272,7 +1272,7 @@ export type ContextCompactionReason =
 	| "noThread"
 	| "turnFailed";
 
-/** How full a task's context window is, in tokens. */
+/** How full a session's context window is, in tokens. */
 export interface ContextUsage {
 	/** The tokens the context holds now, never fewer than none. */
 	used_tokens: number;
@@ -1988,8 +1988,8 @@ export interface ForgetMemoryRequest {
 	memory_id: number;
 }
 
-/** Fetches actor task `id`. */
-export interface GetActorTaskRequest {
+/** Fetches actor session `id`. */
+export interface GetActorSessionRequest {
 	id: number;
 }
 
@@ -2079,7 +2079,7 @@ export interface GetVersionRequest {
  * `onActivityStarted(activity)` when an activity starts,
  * `activity:updated` `onActivityUpdated(activity)` when its progress,
  * status or title changes and `activity:ended` `onActivityEnded(activity)` when it
- * ends; `actor:moved` calls `onActorMoved(task)` when an actor task's
+ * ends; `actor:moved` calls `onActorMoved(session)` when an actor session's
  * status changes; `agent:turn:start` calls
  * `onAgentTurnStart(agent)` when an agent starts answering the user and
  * `agent:turn:end` `onAgentTurnEnd(agent)` when it finishes; `day:start` calls `onDayStart()` at 6:00 and
@@ -2147,7 +2147,7 @@ export interface HookWording {
 }
 
 /**
- * An image to attach to a message to an agent or in an actor task: PNG,
+ * An image to attach to a message to an agent or in an actor session: PNG,
  * JPEG, GIF or WebP, at most 5 MB once base64-encoded.
  */
 export interface ImageUpload {
@@ -2339,7 +2339,7 @@ export interface IntelligenceAgentMessage {
 	 * question, a script's title, `Learning about network`, `Asked Scout:
 	 * …`, `Scout asked: …`, or an error; for the agent's bookkeeping, what
 	 * follows `excerpt_verb`: the memory, the note, or what woke it
-	 * (`Actor task 264 stopped`, `Cue “Morning” fired`, `“Fix
+	 * (`Actor session 264 stopped`, `Cue “Morning” fired`, `“Fix
 	 * the build” was assigned to you`). A compressed context's is
 	 * `Context compacted`, then why when it is known, with no verb.
 	 */
@@ -2398,7 +2398,7 @@ export type IntelligenceAgentPersonality =
 
 /**
  * One fork of an agent's conversation: one of its cues, another agent's
- * question or an actor task it follows woke it.
+ * question or an actor session it follows woke it.
  */
 export interface IntelligenceAgentRun {
 	id: number;
@@ -2407,7 +2407,7 @@ export interface IntelligenceAgentRun {
 	thread_id: number | null;
 	/**
 	 * The hook that fired; `agent:message` for a fork another agent's
-	 * question woke, `actor:moved` for one an actor task it follows woke,
+	 * question woke, `actor:moved` for one an actor session it follows woke,
 	 * `task:assigned` for one a task assigned to it woke.
 	 */
 	hook: HookKind;
@@ -2658,8 +2658,8 @@ export type Invalidation =
 	| { kind: "memories" }
 	| { kind: "activities" }
 	| { kind: "actors" }
-	| { kind: "actorTasks" }
-	| { kind: "actorTask"; id: number }
+	| { kind: "actorSessions" }
+	| { kind: "actorSession"; id: number }
 	| { kind: "actorUsage" }
 	| { kind: "notification"; id: {
 	title: string;
@@ -2679,23 +2679,23 @@ export interface ListActivitiesRequest {
 }
 
 /**
- * Lists the images attached to actor task message `message_id`, in the
+ * Lists the images attached to actor session message `message_id`, in the
  * order sent.
  */
-export interface ListActorTaskMessageAttachmentsRequest {
+export interface ListActorSessionMessageAttachmentsRequest {
 	message_id: number;
 }
 
-/** Lists what was said in actor task `task_id`, oldest first. */
-export interface ListActorTaskMessagesRequest {
-	task_id: number;
+/** Lists what was said in actor session `session_id`, oldest first. */
+export interface ListActorSessionMessagesRequest {
+	session_id: number;
 }
 
 /**
- * Lists actor tasks, latest status change first: actor `actor_id`'s, or
+ * Lists actor sessions, latest status change first: actor `actor_id`'s, or
  * every actor's.
  */
-export interface ListActorTasksRequest {
+export interface ListActorSessionsRequest {
 	actor_id?: number | null;
 }
 
@@ -2940,11 +2940,11 @@ export interface LongCache {
 }
 
 /**
- * Marks actor task `task_id` read, now; the next stretch of work its actor
+ * Marks actor session `session_id` read, now; the next stretch of work its actor
  * finishes marks it unread again.
  */
-export interface MarkActorTaskReadRequest {
-	task_id: number;
+export interface MarkActorSessionReadRequest {
+	session_id: number;
 }
 
 /** Marks agent `agent_id`'s conversation read. */
@@ -3502,12 +3502,12 @@ export interface ResnapshotArticleRequest {
 }
 
 /**
- * Resolves actor task `task_id`: the user is done with it. One going on is
+ * Resolves actor session `session_id`: the user is done with it. One going on is
  * stopped first, telling its actor when its client is online. Lists leave
  * it out from then on, until the user says more, which starts it again.
  */
-export interface ResolveActorTaskRequest {
-	task_id: number;
+export interface ResolveActorSessionRequest {
+	session_id: number;
 }
 
 /**
@@ -3713,10 +3713,10 @@ export interface ScheduleTaskRequest {
 export type ScriptResult = string;
 
 /**
- * Searches every actor task's title and what the user and the actor said
+ * Searches every actor session's title and what the user and the actor said
  * in it, best match first. `query` is FTS5 syntax.
  */
-export interface SearchActorTasksRequest {
+export interface SearchActorSessionsRequest {
 	query: string;
 }
 
@@ -3866,12 +3866,12 @@ export interface SecuritySettings {
 }
 
 /**
- * Says `content` in actor task `task_id`, with any images in
- * `attachments`: more to do, which starts a task that is done or failed
+ * Says `content` in actor session `session_id`, with any images in
+ * `attachments`: more to do, which starts a session that is done or failed
  * again, or a response to one of its requests. Its client must be online.
  */
-export interface SendActorTaskMessageRequest {
-	task_id: number;
+export interface SendActorSessionMessageRequest {
+	session_id: number;
 	content: ActorUserContent;
 	attachments?: ImageUpload[] | null;
 }
@@ -3934,11 +3934,11 @@ export interface ServiceManifest {
 }
 
 /**
- * Switches actor task `task_id` to mode `mode`, one its actor offers, from
+ * Switches actor session `session_id` to mode `mode`, one its actor offers, from
  * its next step on, even while it works. Its client must be online.
  */
-export interface SetActorTaskModeRequest {
-	task_id: number;
+export interface SetActorSessionModeRequest {
+	session_id: number;
 	mode: string;
 }
 
@@ -4182,12 +4182,12 @@ export type SpendPeriod =
 	| "month";
 
 /**
- * Hands actor `actor_id` a new task, `prompt`, with any images in
+ * Hands actor `actor_id` a new session, `prompt`, with any images in
  * `attachments`, in the mode, on the model and at the effort given (the
  * actor's defaults when left out), titled `title`, or by the prompt's
  * first line when left out. Its client must be online.
  */
-export interface StartActorTaskRequest {
+export interface StartActorSessionRequest {
 	actor_id: number;
 	prompt: string;
 	title?: string | null;
@@ -4198,11 +4198,11 @@ export interface StartActorTaskRequest {
 }
 
 /**
- * Stops what actor task `task_id` is doing, telling its actor when its
- * client is online; the task is idle, until the user says more.
+ * Stops what actor session `session_id` is doing, telling its actor when its
+ * client is online; the session is idle, until the user says more.
  */
-export interface StopActorTaskRequest {
-	task_id: number;
+export interface StopActorSessionRequest {
+	session_id: number;
 }
 
 /**
@@ -4228,10 +4228,10 @@ export interface StorageSettings {
 	 */
 	thread_retention_days: number;
 	/**
-	 * An actor task resolved this many days ago is deleted, with its images;
+	 * An actor session resolved this many days ago is deleted, with its images;
 	 * one never resolved stays.
 	 */
-	actor_task_retention_days: number;
+	actor_session_retention_days: number;
 	/**
 	 * A kept version of a task or document last changed this many days ago
 	 * is deleted, and with the last of them a deleted item's way back.
@@ -4623,7 +4623,7 @@ export interface UpdateSecuritySettingsRequest {
 export interface UpdateStorageSettingsRequest {
 	/** Each at least one. */
 	thread_retention_days: number;
-	actor_task_retention_days: number;
+	actor_session_retention_days: number;
 	rewind_retention_days: number;
 	deleted_item_retention_days: number;
 	memory_limit: number;
@@ -4768,10 +4768,10 @@ export interface Vocabulary {
 	/** Smallest to largest. */
 	task_sizes: SizeWording[];
 	activity_statuses: ({ kind: ActivityStatus; label: string })[];
-	/** An actor task's statuses: idle, then its activity's. */
-	actor_task_statuses: ({ kind: ActorTaskStatus; label: string })[];
-	/** How an actor task stopped on its own, as a wake line says it. */
-	actor_task_stops: ({ kind: ActorTaskStop; label: string })[];
+	/** An actor session's statuses: idle, then its activity's. */
+	actor_session_statuses: ({ kind: ActorSessionStatus; label: string })[];
+	/** How an actor session stopped on its own, as a wake line says it. */
+	actor_session_stops: ({ kind: ActorSessionStop; label: string })[];
 	agent_colors: ({ kind: IntelligenceAgentColor; label: string })[];
 	agent_personalities: ({ kind: IntelligenceAgentPersonality; label: string })[];
 	agent_verbosities: ({ kind: IntelligenceAgentVerbosity; label: string })[];
@@ -5109,7 +5109,7 @@ export interface Requests {
 	listSecurityEvents: ListSecurityEventsRequest;
 	/**
 	 * Answers the storage settings: how long the daemon keeps model
-	 * threads, actor tasks and security activity, and how many memories
+	 * threads, actor sessions and security activity, and how many memories
 	 * each scope keeps.
 	 */
 	getStorageSettings: NoArgs;
@@ -5202,30 +5202,30 @@ export interface Requests {
 	 * has used.
 	 */
 	listActorUsage: NoArgs;
-	/** Lists actor tasks, latest status change first. */
-	listActorTasks: ListActorTasksRequest;
-	getActorTask: GetActorTaskRequest;
+	/** Lists actor sessions, latest status change first. */
+	listActorSessions: ListActorSessionsRequest;
+	getActorSession: GetActorSessionRequest;
 	/**
-	 * Full-text matches among actor tasks' titles and transcripts, best
+	 * Full-text matches among actor sessions' titles and transcripts, best
 	 * first.
 	 */
-	searchActorTasks: SearchActorTasksRequest;
-	/** Marks actor task `task_id` read. */
-	markActorTaskRead: MarkActorTaskReadRequest;
-	/** Lists what was said in an actor task, oldest first. */
-	listActorTaskMessages: ListActorTaskMessagesRequest;
-	/** Lists the images attached to an actor task message. */
-	listActorTaskMessageAttachments: ListActorTaskMessageAttachmentsRequest;
-	/** Hands an actor a new task, through its client. */
-	startActorTask: StartActorTaskRequest;
-	/** Says something in an actor task, through its client. */
-	sendActorTaskMessage: SendActorTaskMessageRequest;
-	/** Stops what an actor task is doing, leaving it idle. */
-	stopActorTask: StopActorTaskRequest;
-	/** Resolves an actor task, stopping it first if it is going on. */
-	resolveActorTask: ResolveActorTaskRequest;
-	/** Switches an actor task's mode, through its client. */
-	setActorTaskMode: SetActorTaskModeRequest;
+	searchActorSessions: SearchActorSessionsRequest;
+	/** Marks actor session `session_id` read. */
+	markActorSessionRead: MarkActorSessionReadRequest;
+	/** Lists what was said in an actor session, oldest first. */
+	listActorSessionMessages: ListActorSessionMessagesRequest;
+	/** Lists the images attached to an actor session message. */
+	listActorSessionMessageAttachments: ListActorSessionMessageAttachmentsRequest;
+	/** Hands an actor a new session, through its client. */
+	startActorSession: StartActorSessionRequest;
+	/** Says something in an actor session, through its client. */
+	sendActorSessionMessage: SendActorSessionMessageRequest;
+	/** Stops what an actor session is doing, leaving it idle. */
+	stopActorSession: StopActorSessionRequest;
+	/** Resolves an actor session, stopping it first if it is going on. */
+	resolveActorSession: ResolveActorSessionRequest;
+	/** Switches an actor session's mode, through its client. */
+	setActorSessionMode: SetActorSessionModeRequest;
 	/** Lists every service a `connector`-granted extension reaches. */
 	listConnectorServices: NoArgs;
 	/** Asks connector extension `extension_id` for its sign-in page. */
@@ -5583,7 +5583,7 @@ export interface Replies {
 	listSecurityEvents: SecurityEventPage;
 	/**
 	 * Answers the storage settings: how long the daemon keeps model
-	 * threads, actor tasks and security activity, and how many memories
+	 * threads, actor sessions and security activity, and how many memories
 	 * each scope keeps.
 	 */
 	getStorageSettings: StorageSettings;
@@ -5676,30 +5676,30 @@ export interface Replies {
 	 * has used.
 	 */
 	listActorUsage: ListedActorUsage[];
-	/** Lists actor tasks, latest status change first. */
-	listActorTasks: ActorTask[];
-	getActorTask: ActorTask;
+	/** Lists actor sessions, latest status change first. */
+	listActorSessions: ActorSession[];
+	getActorSession: ActorSession;
 	/**
-	 * Full-text matches among actor tasks' titles and transcripts, best
+	 * Full-text matches among actor sessions' titles and transcripts, best
 	 * first.
 	 */
-	searchActorTasks: ActorTaskSearchHit[];
-	/** Marks actor task `task_id` read. */
-	markActorTaskRead: ActorTask;
-	/** Lists what was said in an actor task, oldest first. */
-	listActorTaskMessages: ActorTaskMessage[];
-	/** Lists the images attached to an actor task message. */
-	listActorTaskMessageAttachments: Attachment[];
-	/** Hands an actor a new task, through its client. */
-	startActorTask: ActorTask;
-	/** Says something in an actor task, through its client. */
-	sendActorTaskMessage: ActorTaskMessage;
-	/** Stops what an actor task is doing, leaving it idle. */
-	stopActorTask: ActorTask;
-	/** Resolves an actor task, stopping it first if it is going on. */
-	resolveActorTask: ActorTask;
-	/** Switches an actor task's mode, through its client. */
-	setActorTaskMode: ActorTask;
+	searchActorSessions: ActorSessionSearchHit[];
+	/** Marks actor session `session_id` read. */
+	markActorSessionRead: ActorSession;
+	/** Lists what was said in an actor session, oldest first. */
+	listActorSessionMessages: ActorSessionMessage[];
+	/** Lists the images attached to an actor session message. */
+	listActorSessionMessageAttachments: Attachment[];
+	/** Hands an actor a new session, through its client. */
+	startActorSession: ActorSession;
+	/** Says something in an actor session, through its client. */
+	sendActorSessionMessage: ActorSessionMessage;
+	/** Stops what an actor session is doing, leaving it idle. */
+	stopActorSession: ActorSession;
+	/** Resolves an actor session, stopping it first if it is going on. */
+	resolveActorSession: ActorSession;
+	/** Switches an actor session's mode, through its client. */
+	setActorSessionMode: ActorSession;
 	/** Lists every service a `connector`-granted extension reaches. */
 	listConnectorServices: ConnectorService[];
 	/** Asks connector extension `extension_id` for its sign-in page. */

@@ -1,11 +1,11 @@
 // A client that stays connected to cohesiond: it reconnects when its
 // session drops, offers what it serves again, says its actors' usage
-// again, and holds its actors' task updates while it is away, as "Staying in sync" in cohesion's
+// again, and holds its actors' session updates while it is away, as "Staying in sync" in cohesion's
 // docs/actors.md describes.
 
 import { CohesionError, SessionClosedError } from './errors.ts';
-import type { ActorSaidContent, ActorTaskReport, ArgsOf, ClientCapabilities, RequestType } from './frames.ts';
-import type { ActorTaskMessage, ActorUsage, Replies } from './generated.ts';
+import type { ActorSaidContent, ActorSessionReport, ArgsOf, ClientCapabilities, RequestType } from './frames.ts';
+import type { ActorSessionMessage, ActorUsage, Replies } from './generated.ts';
 import type { Server } from './server.ts';
 import { Session, type CallHandler, type SessionEnd } from './session.ts';
 
@@ -26,7 +26,7 @@ export interface ClientOptions {
 	/**
 	 * Runs on each new session once its `hello` is accepted, before the
 	 * updates held while away are sent: report, on `session`, the status and
-	 * progress of each task still going on, which cohesiond forgot.
+	 * progress of each session still going on, which cohesiond forgot.
 	 */
 	onConnect?: (session: Session) => Promise<void>;
 	onState?: (state: ClientState) => void;
@@ -34,11 +34,11 @@ export interface ClientOptions {
 
 /** An update waiting to be sent, and who waits on its reply. */
 interface Held {
-	taskId: number;
-	report: ActorTaskReport;
+	sessionId: number;
+	report: ActorSessionReport;
 	/** Sent on a session that ended before its reply: it may have been stored. */
 	unsure: boolean;
-	resolve: (message: ActorTaskMessage | void) => void;
+	resolve: (message: ActorSessionMessage | void) => void;
 	reject: (error: Error) => void;
 }
 
@@ -116,7 +116,7 @@ export class Client {
 	/**
 	 * Says how much of its plan's limits actor `actor` has used, replacing
 	 * what it said before, now when connected and again on every new
-	 * session; with no `plan`, it says nothing. A task's context is a
+	 * session; with no `plan`, it says nothing. A session's context is a
 	 * `context` report instead. Settles with the reply,
 	 * at once while offline: a `CohesionError` when refused, as a daemon
 	 * that doesn't know usage refuses it.
@@ -134,16 +134,16 @@ export class Client {
 	}
 
 	/**
-	 * Reports on actor task `taskId`, now or once connected, in order with
+	 * Reports on actor session `sessionId`, now or once connected, in order with
 	 * every other report. Settles with the reply: the message stored, for a
-	 * message, or a `CohesionError` when refused (a task cohesiond no longer
+	 * message, or a `CohesionError` when refused (a session cohesiond no longer
 	 * has is refused as not found).
 	 */
-	report(taskId: number, report: Extract<ActorTaskReport, { kind: 'message' }>): Promise<ActorTaskMessage>;
-	report(taskId: number, report: ActorTaskReport): Promise<void>;
-	report(taskId: number, report: ActorTaskReport): Promise<ActorTaskMessage | void> {
+	report(sessionId: number, report: Extract<ActorSessionReport, { kind: 'message' }>): Promise<ActorSessionMessage>;
+	report(sessionId: number, report: ActorSessionReport): Promise<void>;
+	report(sessionId: number, report: ActorSessionReport): Promise<ActorSessionMessage | void> {
 		return new Promise((resolve, reject) => {
-			this.held.push({ taskId, report, unsure: false, resolve, reject });
+			this.held.push({ sessionId, report, unsure: false, resolve, reject });
 			void this.flush();
 		});
 	}
@@ -156,13 +156,13 @@ export class Client {
 			for (let next = this.held[0]; next && this.session; next = this.held[0]) {
 				const session = this.session;
 				try {
-					const already = next.unsure && next.report.kind === 'message' ? await stored(session, next.taskId, next.report.content) : null;
+					const already = next.unsure && next.report.kind === 'message' ? await stored(session, next.sessionId, next.report.content) : null;
 					if (already) {
 						this.held.shift();
 						next.resolve(already);
 						continue;
 					}
-					const reply = await session.report(next.taskId, next.report);
+					const reply = await session.report(next.sessionId, next.report);
 					this.held.shift();
 					next.resolve(reply ?? undefined);
 				} catch (error) {
@@ -182,12 +182,12 @@ export class Client {
 }
 
 /**
- * The last thing the actor said in task `taskId`, when it is `content`: an
+ * The last thing the actor said in session `sessionId`, when it is `content`: an
  * update sent before a session dropped, unanswered, may have been stored.
  * A tool's `ended_at` is cohesiond's, not what the actor said.
  */
-async function stored(session: Session, taskId: number, content: ActorSaidContent): Promise<ActorTaskMessage | null> {
-	const messages = await session.request('listActorTaskMessages', { task_id: taskId });
+async function stored(session: Session, sessionId: number, content: ActorSaidContent): Promise<ActorSessionMessage | null> {
+	const messages = await session.request('listActorSessionMessages', { session_id: sessionId });
 	const last = messages.findLast((message) => message.content.sender === 'actor');
 	if (!last) return null;
 	const { sender: _, ...said } = last.content;

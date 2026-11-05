@@ -1,10 +1,10 @@
 // One session with cohesiond: requests and their replies, invalidations,
 // and, for a client that offers something, its `hello`, the daemon's calls
-// and actor task updates.
+// and actor session updates.
 
 import { CohesionError, SessionClosedError } from './errors.ts';
 import type {
-	ActorTaskReport,
+	ActorSessionReport,
 	ArgsOf,
 	ClientCall,
 	ClientCapabilities,
@@ -15,7 +15,7 @@ import type {
 	RequestType,
 	ServerFrame,
 } from './frames.ts';
-import type { ActorTaskMessage, ActorUsage, Invalidation, Replies, Vocabulary } from './generated.ts';
+import type { ActorSessionMessage, ActorUsage, Invalidation, Replies, Vocabulary } from './generated.ts';
 import type { Server } from './server.ts';
 import { connectTransport, type Transport } from './transport.ts';
 
@@ -111,12 +111,12 @@ export class Session {
 		await this.exchange((id) => ({ type: 'hello', id, ...offers }));
 	}
 
-	/** Reports on actor task `taskId`: a message resolves with the message stored. */
-	report(taskId: number, report: Extract<ActorTaskReport, { kind: 'message' }>): Promise<ActorTaskMessage>;
-	report(taskId: number, report: ActorTaskReport): Promise<void>;
-	async report(taskId: number, report: ActorTaskReport): Promise<ActorTaskMessage | void> {
-		const data = await this.exchange((id) => ({ type: 'actorTaskUpdate', id, task_id: taskId, ...report }));
-		if (report.kind === 'message') return data as ActorTaskMessage;
+	/** Reports on actor session `sessionId`: a message resolves with the message stored. */
+	report(sessionId: number, report: Extract<ActorSessionReport, { kind: 'message' }>): Promise<ActorSessionMessage>;
+	report(sessionId: number, report: ActorSessionReport): Promise<void>;
+	async report(sessionId: number, report: ActorSessionReport): Promise<ActorSessionMessage | void> {
+		const data = await this.exchange((id) => ({ type: 'actorSessionUpdate', id, session_id: sessionId, ...report }));
+		if (report.kind === 'message') return data as ActorSessionMessage;
 	}
 
 	/** Says how much of its limits actor `actor` has used, replacing what it said before. */

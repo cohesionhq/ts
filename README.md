@@ -24,25 +24,25 @@ const workspaces = await session.request('listWorkspaces');
 
 `Session` is one connection. `Client` keeps one open: it reconnects with a
 backoff when the session drops (never after an `evicted` frame), offers the
-client's `hello` again, runs `onConnect` for the client to report the tasks
-still going on, then sends the actor task updates held while it was away, in
+client's `hello` again, runs `onConnect` for the client to report the sessions
+still going on, then sends the actor session updates held while it was away, in
 order. An update that may have been stored before its session dropped is
 checked against the transcript before it is sent again. `usage` says how
 much of its plan's limits an actor has used; the client says each actor's
-last usage again on every new session. A task's context window is a
-`context` report, and a `title` report renames a task; `startActorTask`
+last usage again on every new session. A session's context window is a
+`context` report, and a `title` report renames a session; `startActorSession`
 carries the title it was started with, or `null` when Cohesion took the
 prompt's first line and a client may name it.
 
 ```ts
 const client = new Client(server, {
 	offers: { actors: [myActor] },
-	onCall: async (call) => { /* start, message or stop a task */ return { kind: 'accepted' }; },
-	onConnect: async (session) => { /* report each running task's status */ },
+	onCall: async (call) => { /* start, message or stop a session */ return { kind: 'accepted' }; },
+	onConnect: async (session) => { /* report each running session's status */ },
 });
 void client.run();
-await client.report(taskId, { kind: 'message', content: { kind: 'text', text: 'Done.' } });
-await client.report(taskId, { kind: 'context', context: { used_tokens: 41_000, total_tokens: 200_000 } });
+await client.report(sessionId, { kind: 'message', content: { kind: 'text', text: 'Done.' } });
+await client.report(sessionId, { kind: 'context', context: { used_tokens: 41_000, total_tokens: 200_000 } });
 await client.usage(myActor.identifier, { plan: [{ label: '5-hour limit', used: 0.72 }] });
 ```
 
@@ -51,7 +51,7 @@ await client.usage(myActor.identifier, { plan: [{ label: '5-hour limit', used: 0
 `src/generated.ts` is cohesion-core's `TsWire` output, the same file the web
 UI uses: every request, reply and model. `bun run generate` rewrites it from
 a cohesion checkout (`../cohesion`, or `$COHESION`). The session's own frames
-(`hello` offers, calls, actor task updates, actor usage) aren't generated, so
+(`hello` offers, calls, actor session updates, actor usage) aren't generated, so
 `src/frames.ts` writes them out from `cohesion-core/src/protocol/envelope.rs`
 and `capabilities.rs`; keep it in step with them.
 
