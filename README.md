@@ -22,6 +22,37 @@ const session = await Session.open(server);
 const workspaces = await session.request('listWorkspaces');
 ```
 
+### Keeping a pairing
+
+Pair once and keep the `Server`. It's plain JSON, so save it as it is and
+read it back on each start. A setup code works only once, and `localServer`
+makes a new key each time it's called, which cohesiond lists as a new
+client. Either way, set up again only when there's nothing saved.
+
+The file holds the client's private key (or its local key), which is all it
+takes to connect as this client, so make it readable only by you:
+
+```ts
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { Session, pair, type Server } from 'cohesion-ts';
+
+const path = `${process.env.HOME}/.config/my-client/server.json`;
+
+async function server(setupCode: string): Promise<Server> {
+	if (existsSync(path)) return JSON.parse(readFileSync(path, 'utf8')) as Server;
+	const { server } = await pair(setupCode, "Jackson's MacBook Pro");
+	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+	writeFileSync(path, JSON.stringify(server), { mode: 0o600 });
+	chmodSync(path, 0o600); // the mode only applies when the file is created
+	return server;
+}
+
+const session = await Session.open(await server(setupCode));
+```
+
+If the file is lost, pair again with a new setup code from `cohesion pair`.
+
 `Session` is one connection. `Client` keeps one open: it reconnects with a
 backoff when the session drops (never after an `evicted` frame), offers the
 client's `hello` again, runs `onConnect` for the client to report the sessions
@@ -60,8 +91,9 @@ and `capabilities.rs`; keep it in step with them.
 ```sh
 bun install
 bun run check
-bun test
 ```
+
+CI (`.github/workflows/check.yml`) runs the same on every push to `master`.
 
 ## Licence
 
