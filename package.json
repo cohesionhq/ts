@@ -3,7 +3,7 @@
 	"version": "0.1.0",
 	"description": "A TypeScript client for cohesiond, over its Unix socket or its mTLS WebSocket.",
 	"type": "module",
-	"license": "AGPL-3.0-only",
+	"license": "MIT",
 	"module": "index.ts",
 	"exports": {
 		".": "./index.ts"
