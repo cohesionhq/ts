@@ -13,7 +13,5 @@ Read `README.md` first. The protocol it speaks is cohesion's: see
 - No runtime dependencies. TLS and the WebSocket upgrade are hand-rolled so
   cohesiond's certificate is checked against the paired key fingerprint
   before anything is sent; never fall back to unchecked TLS.
-- Tests (`bun test`) cover the low-level pieces: certificates, framing, and
-  the client's ordering and resend rules, against a fake daemon. Don't pin
-  wire JSON.
-- `bun run check` and `bun test` must pass before a change is done.
+- There are no tests. `bun run check`, which CI runs, must pass before a
+  change is done.
